@@ -469,6 +469,7 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/preprocessing.py](src/loan_default/preprocessing.py) | Shared preprocessing, used by the notebooks and by training |
 | [src/loan_default/policy.py](src/loan_default/policy.py) | Approval policy: approve the lowest-risk share of a batch |
 | [src/loan_default/train.py](src/loan_default/train.py) | Trains the final model and saves it with its metadata |
+| [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow |
 | [tests/](tests/) | Unit tests for preprocessing, the policy and training |
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
 | [04_modeling_baseline.ipynb](notebooks/04_modeling_baseline.ipynb) | Baseline, CV, importance and error analysis |
@@ -521,10 +522,21 @@ The run takes about 20 seconds on four cores.
 
 The script reproduces notebook 05's test ROC-AUC (0.6639), Brier score (0.1706) and the baseline's scores. Its approved-loan default rate at 80% approval is **19.45%**, against 19.50% in the notebook, and its training cutoff is 0.2566 against 0.2565. The notebook's exact sampled hyperparameters were not kept, so the script uses the values printed there, rounded to four decimals. The figures in sections 10 and 11 are the notebook's.
 
+### Track experiments
+
+```bash
+python -m pip install -e ".[tracking]"
+python -m loan_default.train --track
+python -m loan_default.train --track --max-iter 200 --learning-rate 0.05
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+With `--track`, each run is recorded in MLflow: hyperparameters, every metric in `metadata.json`, the data hashes, and the two saved files. Runs go to a local SQLite database by default; `--tracking-uri` points them at a shared server. The UI compares runs side by side.
+
 ### Code checks
 
 ```bash
-python -m pytest        # 18 unit tests
+python -m pytest        # unit tests
 ruff check .            # lint: unused code, naming, missing type hints and docstrings
 ruff format --check .   # formatting
 mypy                    # static type check (strict)
@@ -536,7 +548,6 @@ The analysis lives in notebooks, and the final model can now be retrained with o
 
 | Step | What it adds |
 |---|---|
-| Experiment tracking | Log parameters, metrics and the fitted pipeline for each run |
 | Prediction service | An API that takes one application and returns a risk score, packaged in a container |
 | Continuous integration | Run the tests and code checks automatically on every push |
 | Drift analysis | Compare the 2016 cohort with the 2007–2015 training data feature by feature, to explain the calibration gap in section 11 |

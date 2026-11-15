@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "mypy"]
+tracking = ["mlflow"]
 notebooks = ["matplotlib", "jupyter", "scipy", "threadpoolctl"]
 
 [tool.setuptools.packages.find]
@@ -53,5 +54,5 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib.*", "pandas.*"]  # no bundled type information in this environment
+module = ["sklearn.*", "joblib.*", "pandas.*", "mlflow.*"]  # no bundled type information in this environment
 ignore_missing_imports = true

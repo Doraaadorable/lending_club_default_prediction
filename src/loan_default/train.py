@@ -2,6 +2,7 @@
 
     python -m loan_default.train                       # data/ -> models/
     python -m loan_default.train --out-dir somewhere
+    python -m loan_default.train --track               # also record the run in MLflow
 
 Fits the tuned gradient boosting pipeline chosen in notebook 05 on the
 2007-2015 sample, evaluates it on the 2016 sample next to the FICO-only
@@ -34,6 +35,7 @@ from sklearn.preprocessing import StandardScaler
 
 from loan_default.policy import approve_safest, cutoff_at, policy_results
 from loan_default.preprocessing import build_preprocessor, load_split
+from loan_default.tracking import DEFAULT_TRACKING_URI, log_run
 
 # Best of the 40 configurations in notebook 05's randomized search, as printed there (4 decimals).
 TUNED_PARAMS: dict[str, float | int] = {
@@ -158,23 +160,38 @@ def train(config: TrainConfig) -> dict[str, Any]:
     return metadata
 
 
-def parse_args(argv: list[str] | None = None) -> TrainConfig:
-    """Build the configuration from command-line arguments."""
+def parse_args(argv: list[str] | None = None) -> tuple[TrainConfig, argparse.Namespace]:
+    """Build the configuration from command-line arguments; also return the raw arguments."""
     defaults = asdict(TrainConfig())
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--train-path", type=Path, default=defaults["train_path"])
     parser.add_argument("--test-path", type=Path, default=defaults["test_path"])
     parser.add_argument("--out-dir", type=Path, default=defaults["out_dir"])
     parser.add_argument("--approval-rate", type=float, default=defaults["approval_rate"])
+    parser.add_argument("--learning-rate", type=float, help="override the tuned learning rate")
+    parser.add_argument("--max-iter", type=int, help="override the tuned number of boosting iterations")
+    parser.add_argument("--track", action="store_true", help="record the run in MLflow")
+    parser.add_argument("--tracking-uri", default=DEFAULT_TRACKING_URI, help="MLflow tracking URI")
     args = parser.parse_args(argv)
-    return TrainConfig(
-        train_path=args.train_path, test_path=args.test_path, out_dir=args.out_dir, approval_rate=args.approval_rate
+
+    params = dict(TUNED_PARAMS)
+    if args.learning_rate is not None:
+        params["learning_rate"] = args.learning_rate
+    if args.max_iter is not None:
+        params["max_iter"] = args.max_iter
+    config = TrainConfig(
+        train_path=args.train_path,
+        test_path=args.test_path,
+        out_dir=args.out_dir,
+        approval_rate=args.approval_rate,
+        model_params=params,
     )
+    return config, args
 
 
 def main(argv: list[str] | None = None) -> None:
     """Train from the command line and print the headline numbers."""
-    config = parse_args(argv)
+    config, args = parse_args(argv)
     metadata = train(config)
     test, fico = metadata["metrics"]["test"], metadata["metrics"]["test_fico_baseline"]
     print(f"Saved {config.out_dir / 'model.joblib'}")
@@ -184,6 +201,9 @@ def main(argv: list[str] | None = None) -> None:
         f"{test['default_rate_approved']:.2%} (FICO only {fico['default_rate_approved']:.2%})"
     )
     print(f"Approval cutoff from training data: {metadata['approval_cutoff']:.4f}")
+    if args.track:
+        run_id = log_run(metadata, config.out_dir, tracking_uri=args.tracking_uri)
+        print(f"Logged MLflow run {run_id} to {args.tracking_uri}")
 
 
 if __name__ == "__main__":
