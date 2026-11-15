@@ -401,6 +401,24 @@ Risk ranking and probability accuracy therefore need separate evaluation. The mo
 
 A next step is to assess recalibration using a recent labelled validation cohort, followed by evaluation on another untouched period.
 
+### What changed between the periods
+
+[`python -m loan_default.drift`](src/loan_default/drift.py) compares the 2016 sample with the training sample and writes [reports/drift_report.md](reports/drift_report.md).
+
+**The inputs barely changed.** The population stability index (PSI) is below 0.04 for all nine model features, against a usual threshold of 0.10 for a moderate shift. The largest values are for state (0.038) and loan purpose (0.036). Every two-sample test rejects equality (p < 0.01), but with 150,000 and 50,000 loans the tests detect differences too small to matter, so drift is read from PSI.
+
+**Loans of the same predicted risk defaulted more often.** Grouping loans into deciles of predicted risk, the 2016 default rate is higher in every band, by 1.8 percentage points in the safest band and 5.6 to 7.1 points in the riskier half.
+
+| | Default rate |
+|---|---:|
+| Training sample | 18.46% |
+| 2016, if only the mix of risk bands had changed | 18.47% |
+| 2016, actual | 23.28% |
+
+Of the 4.83-point increase, 0.02 points come from a different mix of applicants and 4.81 points from higher default rates among applicants the model scores alike. In drift terms this is a change in the relationship between inputs and outcome (concept drift), not a change in the inputs (covariate drift). It explains the pattern above: ranking held because the ordering of risk was preserved, while probabilities were too low because the overall level moved.
+
+The increase continues a trend inside the training period: 15.49% for 2013 originations, 18.13% for 2014, 20.32% for 2015. The data cannot separate two explanations. Credit quality may have worsened. Alternatively, because only resolved loans are kept and defaults resolve sooner than full repayment, recent cohorts may over-represent defaults (section 14). Monitoring input distributions alone would not have flagged this change; detecting it needs outcome labels.
+
 ## 12. Fairness and ZIP-Code Exclusion
 
 ZIP code is excluded for statistical and ethical reasons.
@@ -472,6 +490,7 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow |
 | [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
 | `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
+| [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
 | [scripts/smoke_test.sh](scripts/smoke_test.sh) | Checks a running service |
 | [tests/](tests/) | Unit tests for preprocessing, the policy and training |
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
@@ -590,7 +609,6 @@ The analysis lives in notebooks. The final model can be retrained with one comma
 
 | Step | What it adds |
 |---|---|
-| Drift analysis | Compare the 2016 cohort with the 2007–2015 training data feature by feature, to explain the calibration gap in section 11 |
 | Recalibration | Assess recalibration on a recent labelled cohort, as proposed in section 11 |
 
 ## 17. Conclusion
