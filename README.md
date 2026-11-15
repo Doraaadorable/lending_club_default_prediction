@@ -470,6 +470,9 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/policy.py](src/loan_default/policy.py) | Approval policy: approve the lowest-risk share of a batch |
 | [src/loan_default/train.py](src/loan_default/train.py) | Trains the final model and saves it with its metadata |
 | [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow |
+| [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
+| `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
+| [scripts/smoke_test.sh](scripts/smoke_test.sh) | Checks a running service |
 | [tests/](tests/) | Unit tests for preprocessing, the policy and training |
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
 | [04_modeling_baseline.ipynb](notebooks/04_modeling_baseline.ipynb) | Baseline, CV, importance and error analysis |
@@ -533,6 +536,43 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 With `--track`, each run is recorded in MLflow: hyperparameters, every metric in `metadata.json`, the data hashes, and the two saved files. Runs go to a local SQLite database by default; `--tracking-uri` points them at a shared server. The UI compares runs side by side.
 
+### Serve predictions
+
+```bash
+python -m pip install -e ".[serve]"
+python -m loan_default.train
+uvicorn loan_default.service:app --port 8000
+```
+
+| Endpoint | Returns |
+|---|---|
+| `GET /health` | `{"status": "ok", "model": ...}`; used by the container health check |
+| `GET /metadata` | The training metadata: parameters, metrics, cutoff and data hashes |
+| `POST /predict` | The default probability for one application and the decision at the training cutoff |
+| `GET /docs` | Interactive API documentation |
+
+```bash
+curl -X POST localhost:8000/predict -H 'Content-Type: application/json' -d '{
+  "revenue": 60000, "loan_amnt": 12000, "fico_n": 690, "dti_n": 18,
+  "emp_length": "5 years", "purpose": "debt_consolidation",
+  "home_ownership_n": "RENT", "addr_state": "NY"}'
+# {"default_probability":0.1911,"decision":"approve","approval_cutoff":0.2566}
+```
+
+Input is validated before it reaches the model: income and amount must be positive, FICO between 300 and 850, the state a two-letter code, and employment length one of the values in the data. Invalid input returns 422 with the reason. `dti_n` and `emp_length` may be omitted and are then treated as missing, as in training. A loan purpose or housing status the model has not seen is scored, not rejected.
+
+The decision applies the cutoff chosen on training data. Section 11 shows the probabilities understate 2016 default levels, so the score is a ranking aid and the service is a demonstration of the deployment path, not a lending tool.
+
+**Docker**
+
+```bash
+docker build -t loan-default .
+docker run --rm -p 8000:8000 --read-only --cap-drop ALL loan-default
+scripts/smoke_test.sh
+```
+
+The build has two stages. The first trains the model from `data/`; the second installs the package and copies in only the trained model, so the served image contains no loan data. Versions are pinned in `constraints.txt`, and the container runs as a non-root user.
+
 ### Code checks
 
 ```bash
@@ -544,11 +584,10 @@ mypy                    # static type check (strict)
 
 ## 16. Planned Work
 
-The analysis lives in notebooks, and the final model can now be retrained with one command (section 15). The remaining steps turn it into a model that is served and monitored. None of the items below is implemented yet.
+The analysis lives in notebooks. The final model can be retrained with one command, its runs tracked, and its predictions served from a container (section 15). None of the items below is implemented yet.
 
 | Step | What it adds |
 |---|---|
-| Prediction service | An API that takes one application and returns a risk score, packaged in a container |
 | Continuous integration | Run the tests and code checks automatically on every push |
 | Drift analysis | Compare the 2016 cohort with the 2007–2015 training data feature by feature, to explain the calibration gap in section 11 |
 | Recalibration | Assess recalibration on a recent labelled cohort, as proposed in section 11 |
