@@ -7,3 +7,16 @@ __pycache__/
 
 # OS files
 .DS_Store
+
+# Trained model artifacts (rebuild with: python -m loan_default.train)
+models/
+
+# Caches and build output
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+
+# Notebook 05 caches
+notebooks/results/
