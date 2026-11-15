@@ -159,7 +159,7 @@ Individual numeric rank correlations with default are weak. We therefore test co
 
 ## 5. Preprocessing and Feature Engineering
 
-[Notebook 03](notebooks/03_pipeline.ipynb) explains the shared pipeline in [preprocessing.py](notebooks/preprocessing.py).
+[Notebook 03](notebooks/03_pipeline.ipynb) explains the shared pipeline in [preprocessing.py](src/loan_default/preprocessing.py).
 
 Full models use eight original application inputs and the engineered `loan_to_income` feature.
 
@@ -466,7 +466,11 @@ The description-availability flag was removed because descriptions became almost
 | [01_split_and_sample.ipynb](notebooks/01_split_and_sample.ipynb) | Temporal split and sampling |
 | [02_eda.ipynb](notebooks/02_eda.ipynb) | Training-data exploration |
 | [03_pipeline.ipynb](notebooks/03_pipeline.ipynb) | Pipeline explanation and checks |
-| [preprocessing.py](notebooks/preprocessing.py) | Shared preprocessing |
+| [src/loan_default/preprocessing.py](src/loan_default/preprocessing.py) | Shared preprocessing, used by the notebooks and by training |
+| [src/loan_default/policy.py](src/loan_default/policy.py) | Approval policy: approve the lowest-risk share of a batch |
+| [src/loan_default/train.py](src/loan_default/train.py) | Trains the final model and saves it with its metadata |
+| [tests/](tests/) | Unit tests for preprocessing, the policy and training |
+| [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
 | [04_modeling_baseline.ipynb](notebooks/04_modeling_baseline.ipynb) | Baseline, CV, importance and error analysis |
 | [05_tuning_and_final_evaluation.ipynb](notebooks/05_tuning_and_final_evaluation.ipynb) | Tuning, ensembles, policies and final evaluation |
 | [requirements.txt](requirements.txt) | Dependency list |
@@ -501,16 +505,40 @@ Notebook 05 saves intermediate results under `notebooks/results/` and figures un
 
 Sampling, shuffled CV, randomized search, and approval tie-breaking use seed **42**.
 
+### Train the final model
+
+```bash
+python -m pip install -e ".[dev]"
+python -m loan_default.train
+```
+
+This fits the tuned gradient boosting pipeline on `data/train.csv`, evaluates it on `data/test.csv` next to the FICO-only baseline, and writes two files to `models/`:
+
+- `model.joblib`: preprocessing and model as one fitted pipeline. It takes raw application rows, so scoring needs no separate preprocessing step.
+- `metadata.json`: hyperparameters, metrics, the approval cutoff derived from out-of-fold training scores, data hashes and the scikit-learn version.
+
+The run takes about 20 seconds on four cores.
+
+The script reproduces notebook 05's test ROC-AUC (0.6639), Brier score (0.1706) and the baseline's scores. Its approved-loan default rate at 80% approval is **19.45%**, against 19.50% in the notebook, and its training cutoff is 0.2566 against 0.2565. The notebook's exact sampled hyperparameters were not kept, so the script uses the values printed there, rounded to four decimals. The figures in sections 10 and 11 are the notebook's.
+
+### Code checks
+
+```bash
+python -m pytest        # 18 unit tests
+ruff check .            # lint: unused code, naming, missing type hints and docstrings
+ruff format --check .   # formatting
+mypy                    # static type check (strict)
+```
+
 ## 16. Planned Work
 
-The analysis so far lives in notebooks. The next stage turns it into a model that can be retrained, served and monitored. None of the items below is implemented yet.
+The analysis lives in notebooks, and the final model can now be retrained with one command (section 15). The remaining steps turn it into a model that is served and monitored. None of the items below is implemented yet.
 
 | Step | What it adds |
 |---|---|
-| Training script | Move the modelling code from notebooks 04–05 into a `train.py` that fits the pipeline and saves it as one artifact |
 | Experiment tracking | Log parameters, metrics and the fitted pipeline for each run |
 | Prediction service | An API that takes one application and returns a risk score, packaged in a container |
-| Tests and code checks | Unit tests for `preprocessing.py`, type hints, linting, and CI |
+| Continuous integration | Run the tests and code checks automatically on every push |
 | Drift analysis | Compare the 2016 cohort with the 2007–2015 training data feature by feature, to explain the calibration gap in section 11 |
 | Recalibration | Assess recalibration on a recent labelled cohort, as proposed in section 11 |
 
