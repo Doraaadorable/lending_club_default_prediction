@@ -1,7 +1,21 @@
 # Loan Default Prediction: Balancing Approval and Risk
 
-**Status:** Analysis complete. The final model can be retrained, tracked, registered, served from a container, and checked for drift (sections 11 and 15). Open items are listed in [section 16](#16-further-work).  
-**Dataset:** [Lending Club loan dataset for granting models](https://zenodo.org/records/11295916)
+Approving the lowest-risk 80% of 2016 loans with gradient boosting gives a 19.5% default rate among approved loans, against 21.6% when ranking by FICO alone and 23.3% with no screening. The model ranks risk as well in 2016 as in development, but its probabilities run almost 5 points low: the applicants looked the same, yet loans of the same predicted risk defaulted more often.
+
+```bash
+python -m pip install -e ".[dev,serve,tracking]"
+python -m loan_default.train          # train and save the pipeline, about 20 seconds
+uvicorn loan_default.service:app      # serve predictions on port 8000
+```
+
+| Part | Where |
+|---|---|
+| Problem, data, analysis and results | Sections 1–10, notebooks 01–05 |
+| Drift, year-by-year validation, recalibration | Section 11 |
+| Training, tracking, registry, API, Docker, CI | Section 15 |
+| Production readiness (ML Test Score) | Section 16 |
+
+**Data:** Ariza-Garzón et al. (2024), [Lending Club loan dataset for granting models](https://doi.org/10.5281/zenodo.11295916), CC BY 4.0.
 
 ## 1. Project Overview
 
@@ -399,8 +413,6 @@ The model underestimated defaults across all ten test risk groups.
 
 Risk ranking and probability accuracy therefore need separate evaluation. The model identifies relatively safer loans, while its numerical probabilities understate the later cohort’s default level.
 
-A next step is to assess recalibration using a recent labelled validation cohort, followed by evaluation on another untouched period.
-
 ### What changed between the periods
 
 [`python -m loan_default.drift`](src/loan_default/drift.py) compares the 2016 sample with the training sample and writes [reports/drift_report.md](reports/drift_report.md).
@@ -461,7 +473,7 @@ Recalibration removes a little over half of the gap. The three methods give the 
 
 Ranking is unchanged, so the approval policy and its results in section 10 are unaffected; recalibration matters where the probability itself is used, for example in pricing or loss forecasts.
 
-Two limits apply. This check reuses the test period, so it is exploratory. And it is not a deployment recipe: outcomes of loans issued in the first half of a year are not known by its second half, so a live system would be correcting with older labels than the ones used here.
+In production the first half's outcomes would not be known by the second half, so a live correction would use older labels and lag further.
 
 ## 12. Fairness and ZIP-Code Exclusion
 
@@ -592,7 +604,7 @@ This fits the tuned gradient boosting pipeline on `data/train.csv`, evaluates it
 
 The run takes about 20 seconds on four cores.
 
-The script uses the exact hyperparameters of the search winner (section 9). It reproduces notebook 05's test ROC-AUC (0.6639), Brier score (0.1706) and the baseline's ROC-AUC. Small differences remain: an approved-loan default rate at 80% approval of **19.48%** against 19.50% in the notebook, a training cutoff of 0.2563 against 0.2565, and 21.57% against 21.56% for the FICO-only baseline. The baseline has no tuned settings, so these differences come from library versions rather than hyperparameters; the rerun search also scores the winner at 0.6634 CV ROC-AUC against 0.6636 in the notebook. The figures in sections 10 and 11 are the notebook's.
+The script uses the search winner's exact hyperparameters (section 9) and matches notebook 05's test ROC-AUC (0.6639) and Brier score (0.1706). The approved-loan default rate at 80% approval is 19.48% against the notebook's 19.50%. The FICO-only baseline, which has no tuned settings, moves by the same amount (21.57% against 21.56%), so the gap comes from library versions. Sections 10 and 11 report the notebook's figures.
 
 ### Track experiments
 
@@ -641,12 +653,12 @@ curl -X POST localhost:8000/predict -H 'Content-Type: application/json' -d '{
   "revenue": 60000, "loan_amnt": 12000, "fico_n": 690, "dti_n": 18,
   "emp_length": "5 years", "purpose": "debt_consolidation",
   "home_ownership_n": "RENT", "addr_state": "NY"}'
-# {"default_probability":0.1911,"decision":"approve","approval_cutoff":0.2566}
+# {"default_probability":0.1942,"decision":"approve","approval_cutoff":0.2563}
 ```
 
 Input is validated before it reaches the model: income and amount must be positive, FICO between 300 and 850, the state a two-letter code, and employment length one of the values in the data. Invalid input returns 422 with the reason. `dti_n` and `emp_length` may be omitted and are then treated as missing, as in training. A loan purpose or housing status the model has not seen is scored, not rejected.
 
-The decision applies the cutoff chosen on training data. Section 11 shows the probabilities understate 2016 default levels, so the score is a ranking aid and the service is a demonstration of the deployment path, not a lending tool.
+The decision applies the cutoff chosen on training data, which approves the safest 80% of training loans.
 
 **Prediction log.** With `PREDICTION_LOG` set to a file path, every valid prediction is appended as one JSON line: time, the hash of the model file, the application fields, and the score and decision. The drift tool compares a log with the training data:
 
@@ -655,7 +667,7 @@ PREDICTION_LOG=logs/predictions.jsonl uvicorn loan_default.service:app --port 80
 python -m loan_default.drift --current logs/predictions.jsonl    # writes reports/log_drift_report.md
 ```
 
-Logged applications have no outcomes yet, so this report covers input drift only. Section 11 shows why that is not enough on its own: in 2016 the inputs were stable while default rates at the same inputs rose.
+Logged applications have no outcomes yet, so this compares inputs only. Section 11 shows the limit: in 2016 the inputs were stable while default rates rose.
 
 **Docker**
 
@@ -684,13 +696,73 @@ mypy                    # static type check (strict)
 
 GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, a second job builds the Docker image, starts it read-only as a non-root user, and runs the smoke test against it.
 
-## 16. Further Work
+## 16. Production Readiness
+
+Scored with the ML Test Score rubric ([Breck et al., 2017](https://research.google/pubs/the-ml-test-score-a-rubric-for-ml-production-readiness-and-technical-debt-reduction/)): 28 tests in four groups. A test scores 1 if it runs automatically, in CI or on every training run; 0.5 if it was done and documented but is run by hand; 0 if it is not done. The overall score is the lowest group total, because strength in one group does not make up for a gap in another.
+
+**Features and data: 3.5**
+
+| Test | Score | Evidence |
+|---|---:|---|
+| Feature expectations are written as a schema | 0.5 | The API enforces types, ranges and allowed values on every request; training data is not checked against it |
+| Every feature earns its place | 0.5 | Permutation importance and the `loan_to_income` ablation (sections 8, 13) |
+| No feature costs more than it adds | 0.5 | ZIP code, title and description dropped with reasons (section 5) |
+| Features meet policy requirements | 0.5 | ZIP code excluded as a geographic proxy (section 12) |
+| The data pipeline has privacy controls | 0 | Public data; none built |
+| New features can be added quickly | 0.5 | One cleaning function and one column list, both under test |
+| Feature code is tested | 1 | Unit tests for cleaning, in CI |
+
+**Model development: 3.5**
+
+| Test | Score | Evidence |
+|---|---:|---|
+| The model spec is reviewed and versioned | 1 | In git, merged through pull requests, checked in CI |
+| Offline metrics track online impact | 0 | No live outcomes |
+| Hyperparameters are tuned | 0.5 | 40-configuration search, rerun with `loan_default.search` |
+| The cost of staleness is known | 0.5 | Year-by-year validation and drift report (section 11) |
+| A simpler model is not better | 1 | Every training run scores the FICO-only baseline alongside the model |
+| Quality holds on important slices | 0.5 | Error analysis by FICO, purpose and housing (section 8) |
+| The model is checked for inclusion | 0 | No protected-group labels (section 12) |
+
+**ML infrastructure: 4**
+
+| Test | Score | Evidence |
+|---|---:|---|
+| Training is reproducible | 1 | A test retrains and compares the full metadata, in CI |
+| Model code is unit tested | 1 | Training, policy, search and analysis modules, in CI |
+| The whole pipeline is integration tested | 1 | CI builds the image, which trains the model, then smoke-tests the running service |
+| Quality is checked before serving | 0 | Metrics are recorded, but nothing blocks a worse model from promotion |
+| A single prediction can be traced | 0.5 | Logs tie each prediction to a model hash; stepping through the pipeline is manual |
+| New models go through a canary | 0 | Not built |
+| A served model can be rolled back | 0.5 | Promote an earlier registry version and re-export (section 15) |
+
+**Monitoring: 2**
+
+| Test | Score | Evidence |
+|---|---:|---|
+| Upstream changes trigger a notification | 0 | Versions are pinned; nothing reports changes |
+| Data invariants hold in training and serving | 0.5 | Enforced on API requests only |
+| Training and serving compute the same features | 1 | One fitted pipeline does both; a test checks the exported model scores identically |
+| The served model is not too stale | 0.5 | Drift and year-by-year checks exist but run by hand |
+| Outputs are numerically valid | 0 | Not checked at serving time |
+| Serving speed and memory hold steady | 0 | Not measured |
+| Prediction quality holds | 0 | Predictions are logged, but outcomes are not joined back |
+
+**Overall: 2**, set by monitoring. The three cheapest steps up all sit there and would lift the overall score to 3.5:
+
+| Change | Effect |
+|---|---|
+| Reject non-finite scores in the service, with a test | Monitoring +1 |
+| Run the log drift report on a schedule in GitHub Actions | Monitoring +0.5 |
+| Validate training data against the API schema at train time | Data +0.5, monitoring +0.5 |
+
+## 17. Further Work
 
 | Step | What it would add | What it needs |
 |---|---|---|
 | A later untouched cohort | Confirm the drift, calibration and recalibration findings on loans not used for any decision here | The raw dataset (section 15), and a cohort with enough follow-up that its outcomes are not selected toward early defaults (section 3) |
 
-## 17. Conclusion
+## 18. Conclusion
 
 Application-time features improve risk ranking beyond FICO alone.
 
