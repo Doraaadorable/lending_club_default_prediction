@@ -23,7 +23,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
-            constraints.txt
+            requirements.txt
       - name: Fetch the prediction log
         id: fetch
         env:
@@ -37,7 +37,7 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.fetch.outputs.found == 'true'
-        run: pip install -c constraints.txt -e .
+        run: pip install -c requirements.txt -e .
       - name: Compare with the training data
         if: steps.fetch.outputs.found == 'true'
         run: python -m loan_default.drift --current predictions.jsonl --out-dir drift --fail-on moderate

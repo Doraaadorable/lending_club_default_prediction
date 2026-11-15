@@ -547,7 +547,7 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/registry.py](src/loan_default/registry.py) | Promotes a registered model version and exports it for serving |
 | [src/loan_default/schema.py](src/loan_default/schema.py) | What a valid application looks like, enforced by the API and by training |
 | [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
-| `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
+| `Dockerfile`, `.dockerignore` | Two-stage image definition |
 | [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
 | [src/loan_default/recalibration.py](src/loan_default/recalibration.py) | Tests three recalibration methods across the two halves of 2016; writes `reports/` |
 | [src/loan_default/temporal.py](src/loan_default/temporal.py) | Chronological validation, year by year; writes `reports/` |
@@ -561,7 +561,7 @@ The description-availability flag was removed because descriptions became almost
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
 | [04_modeling_baseline.ipynb](notebooks/04_modeling_baseline.ipynb) | Baseline, CV, importance and error analysis |
 | [05_tuning_and_final_evaluation.ipynb](notebooks/05_tuning_and_final_evaluation.ipynb) | Tuning, ensembles, policies and final evaluation |
-| [requirements.txt](requirements.txt) | Dependency list |
+| [requirements.txt](requirements.txt) | Exact versions used in CI and the Docker image; Dependabot keeps them current |
 | `data/train.csv` | 150,000-loan development sample |
 | `data/test.csv` | 50,000-loan test sample |
 
@@ -570,7 +570,7 @@ The description-availability flag was removed because descriptions became almost
 ```bash
 git clone https://github.com/Doraaadorable/lending_club_default_prediction.git
 cd lending_club_default_prediction
-python -m pip install -r requirements.txt
+python -m pip install -e ".[notebooks]"
 cd notebooks
 jupyter notebook
 ```
@@ -680,7 +680,7 @@ docker run --rm -p 8000:8000 --read-only --cap-drop ALL loan-default
 scripts/smoke_test.sh
 ```
 
-The build has two stages. The first trains the model from `data/`; the second installs the package and copies in only the trained model, so the served image contains no loan data. Versions are pinned in `constraints.txt`, and the container runs as a non-root user.
+The build has two stages. The first trains the model from `data/`; the second installs the package and copies in only the trained model, so the served image contains no loan data. Versions are pinned in `requirements.txt`, and the container runs as a non-root user.
 
 The container's filesystem is read-only, so a prediction log needs a writable mount:
 

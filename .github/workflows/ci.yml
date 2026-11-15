@@ -16,8 +16,8 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
-            constraints.txt
-      - run: pip install -c constraints.txt -e ".[dev,serve,tracking]"
+            requirements.txt
+      - run: pip install -c requirements.txt -e ".[dev,serve,tracking]"
       - name: Lint (unused code, naming, missing type hints and docstrings)
         run: ruff check .
       - name: Formatting
@@ -58,8 +58,8 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
-            constraints.txt
-      - run: pip install -c constraints.txt -e .
+            requirements.txt
+      - run: pip install -c requirements.txt -e .
       - name: Year-by-year validation
         run: python -m loan_default.temporal --out-dir analysis
       - name: Drift between training data and 2016
