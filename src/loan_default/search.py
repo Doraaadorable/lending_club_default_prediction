@@ -1,6 +1,7 @@
 """Rerun notebook 05's hyperparameter search for gradient boosting and save every result.
 
-    python -m loan_default.search        # writes reports/search_results.csv and reports/best_params.json
+    python -m loan_default.search                        # writes reports/search_results.csv, best_params.json
+    python -m loan_default.search --folds chronological  # same search on year-ordered folds; *_chronological files
 
 Same pipeline, parameter ranges, number of configurations, folds and seeds as the
 notebook, so it samples the same 40 configurations. Notebook 05 kept only rounded
@@ -12,9 +13,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from scipy.stats import loguniform, randint, uniform
-from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+from sklearn.model_selection import BaseCrossValidator, RandomizedSearchCV, StratifiedKFold
 
 from loan_default.preprocessing import load_split
 from loan_default.train import build_model
@@ -22,6 +24,7 @@ from loan_default.train import build_model
 SEED = 42
 N_CONFIGURATIONS = 40
 FOLDS = 5
+CHRONOLOGICAL_YEARS = (2012, 2013, 2014, 2015)
 PARAM_DISTRIBUTIONS: dict[str, Any] = {
     "model__learning_rate": loguniform(0.01, 0.2),
     "model__max_iter": randint(100, 801),
@@ -32,10 +35,27 @@ PARAM_DISTRIBUTIONS: dict[str, Any] = {
 }
 
 
-def search(train_path: Path, n_jobs: int = -1) -> pd.DataFrame:
-    """Run the randomized search and return one row per configuration, best first."""
+def chronological_folds(
+    issue_dates: pd.Series, years: tuple[int, ...] = CHRONOLOGICAL_YEARS
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """One fold per year: fit on all earlier loans, validate on that year's loans."""
+    issued = pd.to_datetime(issue_dates).dt.year.to_numpy()
+    return [(np.flatnonzero(issued < year), np.flatnonzero(issued == year)) for year in years]
+
+
+def search(train_path: Path, folds: str = "shuffled", n_jobs: int = -1) -> pd.DataFrame:
+    """Run the randomized search and return one row per configuration, best first.
+
+    `folds` is "shuffled" (notebook 05's stratified 5-fold CV) or "chronological" (one fold per year).
+    """
     X, y = load_split(train_path)
-    cv = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=SEED)
+    cv: BaseCrossValidator | list[tuple[np.ndarray, np.ndarray]]
+    if folds == "chronological":
+        cv = chronological_folds(X["issue_d"])
+    elif folds == "shuffled":
+        cv = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=SEED)
+    else:
+        raise ValueError(f"folds must be 'shuffled' or 'chronological', got {folds!r}")
     searcher = RandomizedSearchCV(
         build_model({}, SEED),
         PARAM_DISTRIBUTIONS,
@@ -72,13 +92,15 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--train-path", type=Path, default=Path("data/train.csv"))
     parser.add_argument("--out-dir", type=Path, default=Path("reports"))
+    parser.add_argument("--folds", choices=["shuffled", "chronological"], default="shuffled")
     args = parser.parse_args(argv)
 
-    results = search(args.train_path)
+    results = search(args.train_path, args.folds)
+    suffix = "" if args.folds == "shuffled" else f"_{args.folds}"
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    results.to_csv(args.out_dir / "search_results.csv", index=False)
+    results.to_csv(args.out_dir / f"search_results{suffix}.csv", index=False)
     params = best_params(results)
-    (args.out_dir / "best_params.json").write_text(json.dumps(params, indent=2) + "\n")
+    (args.out_dir / f"best_params{suffix}.json").write_text(json.dumps(params, indent=2) + "\n")
     top = results.iloc[0]
     print(f"Best of {len(results)}: ROC-AUC {top['mean_test_ROC_AUC']:.4f}, AP {top['mean_test_AP']:.4f}")
     print(json.dumps(params, indent=2))

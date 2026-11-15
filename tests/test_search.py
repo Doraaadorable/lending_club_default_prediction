@@ -1,6 +1,10 @@
-import pandas as pd
+from pathlib import Path
 
-from loan_default.search import PARAM_DISTRIBUTIONS, best_params
+import numpy as np
+import pandas as pd
+import pytest
+
+from loan_default.search import PARAM_DISTRIBUTIONS, best_params, chronological_folds, search
 
 
 def test_best_params_come_from_the_top_row_as_plain_numbers() -> None:
@@ -39,3 +43,17 @@ def test_search_space_matches_notebook_05() -> None:
             "max_features",
         )
     )
+
+
+def test_chronological_folds_validate_each_year_on_earlier_loans_only() -> None:
+    dates = pd.Series(["2010-05-01", "2011-01-01", "2012-03-01", "2012-07-01", "2013-02-01", "2011-09-01"])
+    folds = chronological_folds(dates, years=(2012, 2013))
+    (train_2012, valid_2012), (train_2013, valid_2013) = folds
+    assert sorted(train_2012) == [0, 1, 5] and sorted(valid_2012) == [2, 3]
+    assert sorted(train_2013) == [0, 1, 2, 3, 5] and list(valid_2013) == [4]
+    assert all(np.intersect1d(t, v).size == 0 for t, v in folds)
+
+
+def test_unknown_fold_scheme_is_rejected() -> None:
+    with pytest.raises(ValueError, match="folds must be"):
+        search(Path(__file__).resolve().parents[1] / "data" / "train.csv", folds="random")
