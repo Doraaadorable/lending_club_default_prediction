@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loan-default"
+version = "0.1.0"
+description = "Loan default prediction on Lending Club data: approval rate against default risk"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-learn>=1.4",
+    "joblib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+notebooks = ["matplotlib", "jupyter", "scipy", "threadpoolctl"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["notebooks/*.ipynb"]  # the notebooks are a record of the analysis, kept as they were run
+
+[tool.ruff.lint]
+select = [
+    "E", "F",  # pycodestyle and pyflakes: syntax problems, unused imports and variables
+    "I",       # import order
+    "N",       # naming conventions
+    "B",       # likely bugs
+    "UP",      # outdated syntax
+    "ANN",     # every function declares its argument and return types
+    "ARG",     # unused arguments
+    "D1",      # public modules and functions have a docstring
+]
+ignore = [
+    "N803", "N806",  # X, X_train: capital X for a feature matrix is the ML convention
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D1"]  # a test's name states what it checks
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "joblib.*", "pandas.*"]  # no bundled type information in this environment
+ignore_missing_imports = true
