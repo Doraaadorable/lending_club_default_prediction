@@ -18,4 +18,14 @@ echo >&2
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"revenue": -1}' "$URL/predict")
 [ "$code" = "422" ] || { echo "expected 422 for bad input, got $code"; exit 1; }
 
+# Latency: 200 sequential predictions; fail if the 95th percentile is above LATENCY_P95_MAX seconds.
+max_p95="${LATENCY_P95_MAX:-0.2}"
+for _ in $(seq 1 200); do
+  curl -s -o /dev/null -w '%{time_total}\n' -X POST -H 'Content-Type: application/json' -d "$good" "$URL/predict"
+done | sort -n | awk -v max="$max_p95" '{t[NR] = $1} END {
+  p95 = t[int(NR * 0.95)]
+  printf "Latency over %d requests: median %.3f s, p95 %.3f s (limit %.3f s)\n", NR, t[int(NR / 2)], p95, max
+  if (p95 > max) exit 1
+}' || { echo "p95 latency above ${max_p95} s"; exit 1; }
+
 echo "Smoke test passed for $URL"

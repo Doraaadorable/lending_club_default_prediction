@@ -9,6 +9,7 @@ append every prediction to it as one JSON line; `python -m loan_default.drift
 
 import hashlib
 import json
+import math
 import os
 import threading
 from datetime import datetime, timezone
@@ -18,37 +19,11 @@ from typing import Any, Literal
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from sklearn.pipeline import Pipeline
 
-EmploymentLength = Literal[
-    "< 1 year",
-    "1 year",
-    "2 years",
-    "3 years",
-    "4 years",
-    "5 years",
-    "6 years",
-    "7 years",
-    "8 years",
-    "9 years",
-    "10+ years",
-    "NI",
-]
-
-
-class LoanApplication(BaseModel):
-    """Application-time information about one loan. Field names match the training data."""
-
-    revenue: float = Field(gt=0, description="Self-reported annual income, USD")
-    loan_amnt: float = Field(gt=0, description="Requested loan amount, USD")
-    fico_n: float = Field(ge=300, le=850, description="FICO score (midpoint of the reported range)")
-    dti_n: float | None = Field(default=None, ge=0, description="Debt-to-income ratio, percent; omit if unknown")
-    emp_length: EmploymentLength = Field(default="NI", description="Employment length; NI means no information")
-    purpose: str = Field(min_length=1, description="Loan purpose, e.g. debt_consolidation, credit_card, car")
-    home_ownership_n: str = Field(min_length=1, description="RENT, MORTGAGE, OWN or OTHER")
-    addr_state: str = Field(pattern="^[A-Z]{2}$", description="Two-letter US state code")
+from loan_default.schema import LoanApplication
 
 
 class Prediction(BaseModel):
@@ -130,6 +105,8 @@ def predict(application: LoanApplication) -> Prediction:
     model, metadata = artifacts()
     row = pd.DataFrame([application.model_dump()])
     probability = float(model.predict_proba(row)[0, 1])
+    if not math.isfinite(probability) or not 0 <= probability <= 1:
+        raise HTTPException(status_code=500, detail=f"model returned an invalid score: {probability}")
     cutoff = float(metadata["approval_cutoff"])
     prediction = Prediction(
         default_probability=round(probability, 4),

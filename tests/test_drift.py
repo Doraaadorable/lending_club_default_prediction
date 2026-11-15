@@ -100,3 +100,24 @@ def test_prediction_log_is_compared_on_inputs_only(tmp_path: Path) -> None:
     assert features.loc["home_ownership_n", "reading"] == "stable"
     report = render_log_report(features.reset_index(), logged, log)
     assert "500 logged applications" in report and "`fico_n`" in report
+
+
+def test_fail_on_flags_moderate_and_large_shifts() -> None:
+    from loan_default.drift import drifted_features
+
+    features = pd.DataFrame({"feature": ["a", "b", "c"], "reading": ["stable", "moderate", "large"]})
+    assert drifted_features(features, "moderate") == ["b", "c"]
+    assert drifted_features(features, "large") == ["c"]
+
+
+def test_command_line_exits_with_an_error_when_the_log_drifts(tmp_path: Path) -> None:
+    from loan_default.drift import main
+    from loan_default.preprocessing import load_split
+
+    X_train, _ = load_split(Path(__file__).resolve().parents[1] / "data" / "train.csv")
+    log = tmp_path / "predictions.jsonl"
+    X_train.head(500).assign(fico_n=X_train["fico_n"].head(500) + 60).to_json(log, orient="records", lines=True)
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--current", str(log), "--out-dir", str(tmp_path / "out"), "--fail-on", "moderate"])
+    assert exit_info.value.code == 1
+    assert (tmp_path / "out" / "log_drift_report.md").is_file()

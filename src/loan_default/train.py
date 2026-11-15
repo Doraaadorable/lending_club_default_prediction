@@ -28,6 +28,7 @@ from numpy.typing import NDArray
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
@@ -36,6 +37,7 @@ from sklearn.preprocessing import StandardScaler
 
 from loan_default.policy import approve_safest, cutoff_at, policy_results
 from loan_default.preprocessing import build_preprocessor, load_split
+from loan_default.schema import FIELDS, check_frame
 from loan_default.tracking import DEFAULT_MODEL_NAME, DEFAULT_TRACKING_URI, log_run
 
 # Best of the 40 configurations in notebook 05's randomized search, at full precision.
@@ -61,6 +63,7 @@ class TrainConfig:
     cv_folds: int = 5
     seed: int = 42
     model_params: dict[str, float | int] = field(default_factory=lambda: dict(TUNED_PARAMS))
+    require_beats_baseline: bool = True
 
 
 def build_model(params: dict[str, float | int], seed: int) -> Pipeline:
@@ -111,6 +114,41 @@ def evaluate(y: pd.Series, scores: NDArray[np.float64], approval_rate: float) ->
     }
 
 
+FICO_BANDS = {"fico_below_680": (0, 680), "fico_680_719": (680, 720), "fico_720_up": (720, 1000)}
+MIN_SLICE_SIZE = 200
+
+
+def slice_metrics(X: pd.DataFrame, y: pd.Series, scores: NDArray[np.float64]) -> dict[str, dict[str, float]]:
+    """ROC-AUC, default rate and size within FICO bands and housing groups large enough to score."""
+    masks = {name: X["fico_n"].between(low, high, inclusive="left") for name, (low, high) in FICO_BANDS.items()}
+    masks |= {f"home_{value}": X["home_ownership_n"] == value for value in sorted(X["home_ownership_n"].unique())}
+    result = {}
+    for name, mask in masks.items():
+        y_slice = y[mask.to_numpy()]
+        if len(y_slice) < MIN_SLICE_SIZE or y_slice.nunique() < 2:
+            continue
+        result[name] = {
+            "n": float(len(y_slice)),
+            "default_rate": float(y_slice.mean()),
+            "roc_auc": float(roc_auc_score(y_slice, scores[mask.to_numpy()])),
+        }
+    return result
+
+
+IMPORTANCE_SAMPLE = 5000
+IMPORTANCE_REPEATS = 3
+
+
+def input_importance(model: Pipeline, X: pd.DataFrame, y: pd.Series, seed: int) -> dict[str, float]:
+    """Drop in test ROC-AUC when each application field is shuffled, on a sample of the test set."""
+    sample = X.sample(min(IMPORTANCE_SAMPLE, len(X)), random_state=seed)
+    result = permutation_importance(
+        model, sample, y.loc[sample.index], scoring="roc_auc", n_repeats=IMPORTANCE_REPEATS, random_state=seed
+    )
+    by_column = dict(zip(sample.columns, result.importances_mean, strict=True))
+    return {field: round(float(by_column[field]), 4) for field in FIELDS}
+
+
 def sha256_of(path: Path) -> str:
     """Hash a file so the metadata records exactly which data was used."""
     digest = hashlib.sha256()
@@ -124,6 +162,8 @@ def train(config: TrainConfig) -> dict[str, Any]:
     """Fit, evaluate and save the model; return the metadata that was written."""
     X_train, y_train = load_split(config.train_path)
     X_test, y_test = load_split(config.test_path)
+    check_frame(X_train, "training data")
+    check_frame(X_test, "test data")
     if not set(X_train["id"]).isdisjoint(X_test["id"]):
         raise ValueError("train and test share loan ids")
 
@@ -137,6 +177,12 @@ def train(config: TrainConfig) -> dict[str, Any]:
     model.fit(X_train, y_train)
     baseline.fit(X_train, y_train)
     test_scores = default_scores(model, X_test)
+    baseline_scores = default_scores(baseline, X_test)
+    model_auc, baseline_auc = roc_auc_score(y_test, test_scores), roc_auc_score(y_test, baseline_scores)
+    if config.require_beats_baseline and model_auc <= baseline_auc:
+        raise ValueError(
+            f"model test ROC-AUC {model_auc:.4f} does not beat the FICO-only baseline ({baseline_auc:.4f})"
+        )
 
     metadata: dict[str, Any] = {
         "model": "HistGradientBoostingClassifier",
@@ -149,7 +195,9 @@ def train(config: TrainConfig) -> dict[str, Any]:
         "metrics": {
             "train_out_of_fold": evaluate(y_train, oof, config.approval_rate),
             "test": evaluate(y_test, test_scores, config.approval_rate),
-            "test_fico_baseline": evaluate(y_test, default_scores(baseline, X_test), config.approval_rate),
+            "test_fico_baseline": evaluate(y_test, baseline_scores, config.approval_rate),
+            "test_slices": slice_metrics(X_test, y_test, test_scores),
+            "test_input_importance": input_importance(model, X_test, y_test, config.seed),
             "test_approval_rate_at_cutoff": float((test_scores <= cutoff).mean()),
         },
         "data_sha256": {"train": sha256_of(config.train_path), "test": sha256_of(config.test_path)},

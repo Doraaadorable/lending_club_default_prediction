@@ -1,0 +1,46 @@
+name: Drift check
+
+# Compares logged predictions with the training data every Monday. A failed run means
+# at least one input feature has shifted by a moderate amount or more (PSI >= 0.10);
+# GitHub notifies the repository owner of failed scheduled runs.
+#
+# Set the repository variable PREDICTION_LOG_URL to where the service's prediction log
+# can be downloaded. Without it the job reports that there is nothing to check.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            constraints.txt
+      - name: Fetch the prediction log
+        id: fetch
+        env:
+          PREDICTION_LOG_URL: ${{ vars.PREDICTION_LOG_URL }}
+        run: |
+          if [ -z "$PREDICTION_LOG_URL" ]; then
+            echo "PREDICTION_LOG_URL is not set: no prediction log to check." >> "$GITHUB_STEP_SUMMARY"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            curl -sfL "$PREDICTION_LOG_URL" -o predictions.jsonl
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.fetch.outputs.found == 'true'
+        run: pip install -c constraints.txt -e .
+      - name: Compare with the training data
+        if: steps.fetch.outputs.found == 'true'
+        run: python -m loan_default.drift --current predictions.jsonl --out-dir drift --fail-on moderate
+      - name: Add the report to the run summary
+        if: always() && steps.fetch.outputs.found == 'true'
+        run: cat drift/log_drift_report.md >> "$GITHUB_STEP_SUMMARY"
