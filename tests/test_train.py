@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import joblib
 import pandas as pd
@@ -71,3 +72,42 @@ def test_command_line_overrides_defaults() -> None:
     assert config.model_params["max_iter"] == 50
     assert config.model_params["learning_rate"] == TUNED_PARAMS["learning_rate"]
     assert args.track is False
+
+
+def test_slice_metrics_cover_fico_bands_and_housing(metadata: dict[str, Any]) -> None:
+    slices = metadata["metrics"]["test_slices"]
+    assert {"fico_680_719", "home_RENT"} <= set(slices)
+    for values in slices.values():
+        assert values["n"] >= 200 and 0 <= values["roc_auc"] <= 1
+
+
+def test_a_model_that_does_not_beat_fico_is_rejected(
+    config: TrainConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sklearn.dummy import DummyClassifier
+    from sklearn.pipeline import Pipeline
+
+    from loan_default import train as train_module
+
+    monkeypatch.setattr(train_module, "build_model", lambda *_: Pipeline([("model", DummyClassifier())]))
+    weak = TrainConfig(train_path=config.train_path, test_path=config.test_path, out_dir=tmp_path)
+    with pytest.raises(ValueError, match="does not beat the FICO-only baseline"):
+        train(weak)
+    assert not (tmp_path / "model.joblib").exists()
+
+
+def test_training_data_that_breaks_the_schema_is_rejected(config: TrainConfig, tmp_path: Path) -> None:
+    broken = pd.read_csv(config.train_path, low_memory=False)
+    broken.loc[10, "fico_n"] = 2000
+    broken.to_csv(tmp_path / "train.csv", index=False)
+    bad = TrainConfig(train_path=tmp_path / "train.csv", test_path=config.test_path, out_dir=tmp_path / "out")
+    with pytest.raises(ValueError, match="training data breaks the application schema"):
+        train(bad)
+
+
+def test_importance_is_recorded_for_every_application_field(metadata: dict[str, Any]) -> None:
+    from loan_default.schema import FIELDS
+
+    importance = metadata["metrics"]["test_input_importance"]
+    assert list(importance) == FIELDS
+    assert importance["fico_n"] > 0

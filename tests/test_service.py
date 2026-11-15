@@ -2,6 +2,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -124,3 +125,21 @@ def test_invalid_requests_are_not_logged(client: TestClient, tmp_path: Path, mon
 def test_nothing_is_logged_without_a_log_file(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PREDICTION_LOG", raising=False)
     assert client.post("/predict", json=APPLICATION).status_code == 200
+
+
+class BrokenModel:
+    def predict_proba(self, _rows: pd.DataFrame) -> np.ndarray:
+        return np.array([[np.nan, np.nan]])
+
+
+def test_invalid_model_output_is_an_error_not_a_decision(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, metadata = service.artifacts()
+    monkeypatch.setattr(service, "artifacts", lambda: (BrokenModel(), metadata))
+    log = tmp_path / "predictions.jsonl"
+    monkeypatch.setenv("PREDICTION_LOG", str(log))
+    response = client.post("/predict", json=APPLICATION)
+    assert response.status_code == 500
+    assert "invalid score" in response.json()["detail"]
+    assert not log.exists()

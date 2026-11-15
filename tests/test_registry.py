@@ -71,6 +71,7 @@ def test_the_project_pipeline_can_be_registered_and_exported(tmp_path: Path, mon
         test_path=tmp_path / "test.csv",
         out_dir=tmp_path / "run",
         model_params={"max_iter": 20, "max_leaf_nodes": 7},
+        require_beats_baseline=False,  # a tiny sample; this test is about registration, not quality
     )
     metadata = train(config)
     uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
@@ -82,3 +83,19 @@ def test_the_project_pipeline_can_be_registered_and_exported(tmp_path: Path, mon
     original = joblib.load(config.out_dir / "model.joblib")
     rows = pd.read_csv(config.test_path, low_memory=False).drop(columns=["Default"]).head(20)
     np.testing.assert_allclose(served.predict_proba(rows), original.predict_proba(rows))
+
+
+def test_a_weaker_version_needs_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    for version, auc in ((1, 0.70), (2, 0.65)):
+        metadata = save_run(tmp_path / f"run{version}", 1.0)
+        metadata["metrics"] = {"test": {"roc_auc": auc}}
+        (tmp_path / f"run{version}" / "metadata.json").write_text(json.dumps(metadata))
+        log_run(metadata, tmp_path / f"run{version}", tracking_uri=uri, experiment="test", register_as="demo")
+
+    promote(1, name="demo", tracking_uri=uri)
+    with pytest.raises(ValueError, match="below champion version 1"):
+        promote(2, name="demo", tracking_uri=uri)
+    promote(2, name="demo", tracking_uri=uri, force=True)
+    assert export(tmp_path / "served", name="demo", tracking_uri=uri) == 2

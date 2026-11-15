@@ -12,6 +12,7 @@ dependencies = [
     "pandas",
     "scikit-learn>=1.4",
     "scipy",
+    "pydantic>=2",
     "joblib",
 ]
 
