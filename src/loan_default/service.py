@@ -2,11 +2,16 @@
 
     uvicorn loan_default.service:app --port 8000
 
-Interactive documentation is served at /docs.
+Interactive documentation is served at /docs. Set PREDICTION_LOG to a file path to
+append every prediction to it as one JSON line; `python -m loan_default.drift
+--current <file>` then compares the logged applications with the training data.
 """
 
+import hashlib
 import json
 import os
+import threading
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -75,11 +80,34 @@ def model_dir() -> Path:
 
 @lru_cache(maxsize=1)
 def artifacts() -> tuple[Pipeline, dict[str, Any]]:
-    """Load the fitted pipeline and its metadata once per process."""
+    """Load the fitted pipeline and its metadata once per process.
+
+    The metadata gains `model_sha256`, a hash of the model file, so logged predictions
+    can be traced to the exact model that made them.
+    """
     directory = model_dir()
     model: Pipeline = joblib.load(directory / "model.joblib")
     metadata: dict[str, Any] = json.loads((directory / "metadata.json").read_text())
+    metadata["model_sha256"] = hashlib.sha256((directory / "model.joblib").read_bytes()).hexdigest()
     return model, metadata
+
+
+_log_lock = threading.Lock()
+
+
+def log_prediction(application: LoanApplication, prediction: Prediction, model_sha256: str) -> None:
+    """Append one prediction to the file named by PREDICTION_LOG; do nothing if it is unset."""
+    path = os.environ.get("PREDICTION_LOG")
+    if not path:
+        return
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "model_sha256": model_sha256,
+        **application.model_dump(),
+        **prediction.model_dump(),
+    }
+    with _log_lock, open(path, "a", encoding="utf-8") as log:
+        log.write(json.dumps(record) + "\n")
 
 
 @app.get("/health")
@@ -103,8 +131,10 @@ def predict(application: LoanApplication) -> Prediction:
     row = pd.DataFrame([application.model_dump()])
     probability = float(model.predict_proba(row)[0, 1])
     cutoff = float(metadata["approval_cutoff"])
-    return Prediction(
+    prediction = Prediction(
         default_probability=round(probability, 4),
         decision="approve" if probability <= cutoff else "reject",
         approval_cutoff=round(cutoff, 4),
     )
+    log_prediction(application, prediction, metadata["model_sha256"])
+    return prediction

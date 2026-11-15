@@ -26,3 +26,7 @@ mlflow.db
 mlruns/
 mlartifacts/
 build/
+
+# Exported models and prediction logs
+served/
+logs/

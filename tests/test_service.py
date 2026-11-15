@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -97,3 +98,29 @@ def test_invalid_input_is_rejected_with_422(client: TestClient, change: dict[str
 def test_missing_required_field_is_rejected(client: TestClient) -> None:
     incomplete = {k: v for k, v in APPLICATION.items() if k != "fico_n"}
     assert client.post("/predict", json=incomplete).status_code == 422
+
+
+def test_predictions_are_logged_when_a_log_file_is_set(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "predictions.jsonl"
+    monkeypatch.setenv("PREDICTION_LOG", str(log))
+    first = client.post("/predict", json=APPLICATION).json()
+    client.post("/predict", json={**APPLICATION, "fico_n": 800})
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(records) == 2
+    assert records[0]["fico_n"] == 690 and records[1]["fico_n"] == 800
+    assert records[0]["default_probability"] == first["default_probability"]
+    assert records[0]["model_sha256"] == client.get("/metadata").json()["model_sha256"]
+
+
+def test_invalid_requests_are_not_logged(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = tmp_path / "predictions.jsonl"
+    monkeypatch.setenv("PREDICTION_LOG", str(log))
+    client.post("/predict", json={**APPLICATION, "fico_n": 900})
+    assert not log.exists()
+
+
+def test_nothing_is_logged_without_a_log_file(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PREDICTION_LOG", raising=False)
+    assert client.post("/predict", json=APPLICATION).status_code == 200
