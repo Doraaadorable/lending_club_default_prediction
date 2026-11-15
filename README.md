@@ -504,7 +504,8 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/preprocessing.py](src/loan_default/preprocessing.py) | Shared preprocessing, used by the notebooks and by training |
 | [src/loan_default/policy.py](src/loan_default/policy.py) | Approval policy: approve the lowest-risk share of a batch |
 | [src/loan_default/train.py](src/loan_default/train.py) | Trains the final model and saves it with its metadata |
-| [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow |
+| [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow and optionally registers the model |
+| [src/loan_default/registry.py](src/loan_default/registry.py) | Promotes a registered model version and exports it for serving |
 | [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
 | `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
 | [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
@@ -575,6 +576,22 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 With `--track`, each run is recorded in MLflow: hyperparameters, every metric in `metadata.json`, the data hashes, and the two saved files. Runs go to a local SQLite database by default; `--tracking-uri` points them at a shared server. The UI compares runs side by side.
 
+### Register and promote a model
+
+```bash
+python -m loan_default.train --register
+python -m loan_default.registry promote --version 1
+python -m loan_default.registry export --out-dir served
+```
+
+`--register` records the run and adds the fitted pipeline to the MLflow model registry as a new version of `loan-default`. `promote` points the `champion` alias at a version; `export` writes that version as `model.joblib` and `metadata.json`, the files the service reads. Switching the served model is then a promotion and an export, with no retraining and no image rebuild:
+
+```bash
+docker run --rm -p 8000:8000 --read-only -v "$PWD/served:/app/models:ro" loan-default
+```
+
+The exported metadata records the registered name, version and alias, so `/metadata` shows which version is live.
+
 ### Serve predictions
 
 ```bash
@@ -602,6 +619,15 @@ Input is validated before it reaches the model: income and amount must be positi
 
 The decision applies the cutoff chosen on training data. Section 11 shows the probabilities understate 2016 default levels, so the score is a ranking aid and the service is a demonstration of the deployment path, not a lending tool.
 
+**Prediction log.** With `PREDICTION_LOG` set to a file path, every valid prediction is appended as one JSON line: time, the hash of the model file, the application fields, and the score and decision. The drift tool compares a log with the training data:
+
+```bash
+PREDICTION_LOG=logs/predictions.jsonl uvicorn loan_default.service:app --port 8000
+python -m loan_default.drift --current logs/predictions.jsonl    # writes reports/log_drift_report.md
+```
+
+Logged applications have no outcomes yet, so this report covers input drift only. Section 11 shows why that is not enough on its own: in 2016 the inputs were stable while default rates at the same inputs rose.
+
 **Docker**
 
 ```bash
@@ -611,6 +637,12 @@ scripts/smoke_test.sh
 ```
 
 The build has two stages. The first trains the model from `data/`; the second installs the package and copies in only the trained model, so the served image contains no loan data. Versions are pinned in `constraints.txt`, and the container runs as a non-root user.
+
+The container's filesystem is read-only, so a prediction log needs a writable mount:
+
+```bash
+docker run --rm -p 8000:8000 --read-only --tmpfs /app/logs -e PREDICTION_LOG=/app/logs/predictions.jsonl loan-default
+```
 
 ### Code checks
 

@@ -9,6 +9,7 @@ from typing import Any
 
 DEFAULT_TRACKING_URI = "sqlite:///mlflow.db"
 DEFAULT_EXPERIMENT = "loan-default"
+DEFAULT_MODEL_NAME = "loan-default"
 
 
 def flatten_metrics(metrics: dict[str, Any], prefix: str = "") -> dict[str, float]:
@@ -28,9 +29,16 @@ def log_run(
     out_dir: Path,
     tracking_uri: str = DEFAULT_TRACKING_URI,
     experiment: str = DEFAULT_EXPERIMENT,
+    register_as: str | None = None,
 ) -> str:
-    """Log one finished training run and return its MLflow run id."""
+    """Log one finished training run and return its MLflow run id.
+
+    With `register_as`, the fitted pipeline is also logged as an MLflow model and added
+    to the model registry under that name as a new version.
+    """
+    import joblib
     import mlflow
+    import mlflow.sklearn
 
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment)
@@ -56,5 +64,9 @@ def log_run(
         )
         mlflow.log_artifact(str(out_dir / "model.joblib"))
         mlflow.log_artifact(str(out_dir / "metadata.json"))
+        if register_as:
+            mlflow.sklearn.log_model(
+                joblib.load(out_dir / "model.joblib"), name="model", registered_model_name=register_as
+            )
         run_id: str = run.info.run_id
     return run_id
