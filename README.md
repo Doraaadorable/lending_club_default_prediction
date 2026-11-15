@@ -582,13 +582,14 @@ ruff format --check .   # formatting
 mypy                    # static type check (strict)
 ```
 
+GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, a second job builds the Docker image, starts it read-only as a non-root user, and runs the smoke test against it.
+
 ## 16. Planned Work
 
 The analysis lives in notebooks. The final model can be retrained with one command, its runs tracked, and its predictions served from a container (section 15). None of the items below is implemented yet.
 
 | Step | What it adds |
 |---|---|
-| Continuous integration | Run the tests and code checks automatically on every push |
 | Drift analysis | Compare the 2016 cohort with the 2007–2015 training data feature by feature, to explain the calibration gap in section 11 |
 | Recalibration | Assess recalibration on a recent labelled cohort, as proposed in section 11 |
 
