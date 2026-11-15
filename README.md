@@ -1,6 +1,6 @@
 # Loan Default Prediction: Balancing Approval and Risk
 
-**Status:** Data preparation, EDA, model comparison, tuning, and final evaluation completed. Planned work is listed in [section 16](#16-planned-work).  
+**Status:** Analysis complete; the final model can be retrained, tracked, served from a container and checked for drift (sections 11 and 15). Open items are listed in [section 16](#16-further-work).  
 **Dataset:** [Lending Club loan dataset for granting models](https://zenodo.org/records/11295916)
 
 ## 1. Project Overview
@@ -419,6 +419,23 @@ Of the 4.83-point increase, 0.02 points come from a different mix of applicants 
 
 The increase continues a trend inside the training period: 15.49% for 2013 originations, 18.13% for 2014, 20.32% for 2015. The data cannot separate two explanations. Credit quality may have worsened. Alternatively, because only resolved loans are kept and defaults resolve sooner than full repayment, recent cohorts may over-represent defaults (section 14). Monitoring input distributions alone would not have flagged this change; detecting it needs outcome labels.
 
+### Does recalibration help?
+
+[`python -m loan_default.recalibration`](src/loan_default/recalibration.py) fits a correction on loans issued in January–June 2016 and judges it on loans issued in July–December 2016 ([reports/recalibration_report.md](reports/recalibration_report.md)).
+
+| Method | Mean predicted | Actual | Brier | Mean gap over 10 risk bins | ROC-AUC |
+|---|---:|---:|---:|---:|---:|
+| No recalibration | 18.11% | 24.59% | 0.1794 | 6.48 pp | 0.6588 |
+| Intercept shift | 21.67% | 24.59% | 0.1758 | 2.92 pp | 0.6588 |
+| Platt scaling | 21.65% | 24.59% | 0.1758 | 2.95 pp | 0.6588 |
+| Isotonic | 21.66% | 24.59% | 0.1758 | 2.93 pp | 0.6579 |
+
+Recalibration removes a little over half of the gap. The three methods give the same result, so the error is a shift in level: one constant on the log-odds scale does as well as a flexible mapping. The remaining gap exists because the default rate kept rising within 2016, from 22.39% in the first half to 24.59% in the second, so a correction fitted on one period is already behind in the next.
+
+Ranking is unchanged, so the approval policy and its results in section 10 are unaffected; recalibration matters where the probability itself is used, for example in pricing or loss forecasts.
+
+Two limits apply. This check reuses the test period, so it is exploratory. And it is not a deployment recipe: outcomes of loans issued in the first half of a year are not known by its second half, so a live system would be correcting with older labels than the ones used here.
+
 ## 12. Fairness and ZIP-Code Exclusion
 
 ZIP code is excluded for statistical and ethical reasons.
@@ -491,6 +508,9 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
 | `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
 | [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
+| [src/loan_default/recalibration.py](src/loan_default/recalibration.py) | Tests three recalibration methods across the two halves of 2016; writes `reports/` |
+| [reports/](reports/) | Generated drift and recalibration reports |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | Continuous integration |
 | [scripts/smoke_test.sh](scripts/smoke_test.sh) | Checks a running service |
 | [tests/](tests/) | Unit tests for preprocessing, the policy and training |
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
@@ -603,13 +623,17 @@ mypy                    # static type check (strict)
 
 GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, a second job builds the Docker image, starts it read-only as a non-root user, and runs the smoke test against it.
 
-## 16. Planned Work
+## 16. Further Work
 
-The analysis lives in notebooks. The final model can be retrained with one command, its runs tracked, and its predictions served from a container (section 15). None of the items below is implemented yet.
+Training, experiment tracking, serving, CI, and the drift and recalibration analyses are in place (sections 11 and 15). Not implemented:
 
-| Step | What it adds |
+| Step | What it would add |
 |---|---|
-| Recalibration | Assess recalibration on a recent labelled cohort, as proposed in section 11 |
+| Chronological validation | Replace shuffled CV with folds ordered by origination year, so development scores reflect predicting later cohorts |
+| Prediction logging | Record the service's inputs and scores, so the drift comparison can run on live traffic instead of a fixed sample |
+| Model registry | Promote a tracked run to the served model by name, instead of training inside the image build |
+| Exact search results | Save the randomized search output, so the script and notebook 05 use identical hyperparameters |
+| A later untouched cohort | Confirm the recalibration and drift findings on data not used for any decision here |
 
 ## 17. Conclusion
 
@@ -617,7 +641,7 @@ Application-time features improve risk ranking beyond FICO alone.
 
 At **80% approval**, tuned gradient boosting retained 40,000 test loans with a **19.50%** default rate, compared with **21.56%** for FICO. This represents **827 fewer defaulted loans** at the same approval volume.
 
-The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. Further work should assess chronological validation, recalibration, and dependence on geographic features.
+The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Further work should assess chronological validation and dependence on geographic features.
 
 ## References
 
