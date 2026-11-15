@@ -16,6 +16,7 @@ matter, so the report reads drift from PSI and uses the p-value only as a sanity
 """
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,13 @@ def categorical_psi(reference: pd.Series, current: pd.Series) -> float:
         0.0
     )
     return psi_from_shares(shares.iloc[:, 0].to_numpy(dtype=float), shares.iloc[:, 1].to_numpy(dtype=float))
+
+
+def drifted_features(features: pd.DataFrame, level: str) -> list[str]:
+    """Features whose shift reading is `level` or worse ("moderate" includes "large")."""
+    flagged = {"moderate": {"moderate", "large"}, "large": {"large"}}[level]
+    names: list[str] = features.loc[features["reading"].isin(flagged), "feature"].tolist()
+    return names
 
 
 def psi_label(psi: float) -> str:
@@ -242,7 +250,7 @@ def render_report(
     return "\n".join(lines)
 
 
-def run(config: TrainConfig, out_dir: Path) -> str:
+def run(config: TrainConfig, out_dir: Path) -> tuple[str, pd.DataFrame]:
     """Compute every table and write the Markdown report and the feature table."""
     X_train, y_train = load_split(config.train_path)
     X_test, y_test = load_split(config.test_path)
@@ -263,7 +271,7 @@ def run(config: TrainConfig, out_dir: Path) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "drift_report.md").write_text(report)
     features.to_csv(out_dir / "feature_drift.csv", index=False)
-    return report
+    return report, features
 
 
 def load_prediction_log(path: Path) -> pd.DataFrame:
@@ -287,7 +295,7 @@ def render_log_report(features: pd.DataFrame, log: pd.DataFrame, source: Path) -
     return "\n".join(lines)
 
 
-def run_on_log(config: TrainConfig, log_path: Path, out_dir: Path) -> str:
+def run_on_log(config: TrainConfig, log_path: Path, out_dir: Path) -> tuple[str, pd.DataFrame]:
     """Compare logged applications with the training sample and write the report."""
     X_train, _ = load_split(config.train_path)
     log = load_prediction_log(log_path)
@@ -296,7 +304,7 @@ def run_on_log(config: TrainConfig, log_path: Path, out_dir: Path) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "log_drift_report.md").write_text(report)
     features.to_csv(out_dir / "log_feature_drift.csv", index=False)
-    return report
+    return report, features
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -306,11 +314,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--current", type=Path, help="prediction log (JSON lines) to compare instead of the 2016 sample"
     )
+    parser.add_argument(
+        "--fail-on", choices=["moderate", "large"], help="exit with status 1 if any feature shifts this much or more"
+    )
     args = parser.parse_args(argv)
     if args.current:
-        print(run_on_log(TrainConfig(), args.current, args.out_dir))
+        report, features = run_on_log(TrainConfig(), args.current, args.out_dir)
     else:
-        print(run(TrainConfig(), args.out_dir))
+        report, features = run(TrainConfig(), args.out_dir)
+    print(report)
+    flagged = drifted_features(features, args.fail_on) if args.fail_on else []
+    if flagged:
+        print(f"Drift at or above '{args.fail_on}': {', '.join(flagged)}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

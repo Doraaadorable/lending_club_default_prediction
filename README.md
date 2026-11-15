@@ -545,6 +545,7 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/train.py](src/loan_default/train.py) | Trains the final model and saves it with its metadata |
 | [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow and optionally registers the model |
 | [src/loan_default/registry.py](src/loan_default/registry.py) | Promotes a registered model version and exports it for serving |
+| [src/loan_default/schema.py](src/loan_default/schema.py) | What a valid application looks like, enforced by the API and by training |
 | [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
 | `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
 | [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
@@ -553,6 +554,8 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/search.py](src/loan_default/search.py) | Reruns notebook 05's hyperparameter search, on shuffled or year-ordered folds; writes `reports/` |
 | [reports/](reports/) | Generated drift, chronological validation, recalibration and search results |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Continuous integration |
+| [.github/workflows/drift.yml](.github/workflows/drift.yml) | Weekly drift check on the prediction log |
+| [.github/dependabot.yml](.github/dependabot.yml) | Weekly dependency updates |
 | [scripts/smoke_test.sh](scripts/smoke_test.sh) | Checks a running service |
 | [tests/](tests/) | Unit tests for preprocessing, the policy and training |
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
@@ -600,9 +603,9 @@ python -m loan_default.train
 This fits the tuned gradient boosting pipeline on `data/train.csv`, evaluates it on `data/test.csv` next to the FICO-only baseline, and writes two files to `models/`:
 
 - `model.joblib`: preprocessing and model as one fitted pipeline. It takes raw application rows, so scoring needs no separate preprocessing step.
-- `metadata.json`: hyperparameters, metrics, the approval cutoff derived from out-of-fold training scores, data hashes and the scikit-learn version.
+- `metadata.json`: hyperparameters, metrics, the approval cutoff derived from out-of-fold training scores, data hashes and the scikit-learn version. Metrics include test ROC-AUC by FICO band and housing status, and how much test ROC-AUC drops when each application field is shuffled.
 
-The run takes about 20 seconds on four cores.
+The run takes about 20 seconds on four cores. It stops without saving if the training or test file breaks the application schema the API enforces (`schema.py`), or if the model does not beat the FICO-only baseline on test ROC-AUC.
 
 The script uses the search winner's exact hyperparameters (section 9) and matches notebook 05's test ROC-AUC (0.6639) and Brier score (0.1706). The approved-loan default rate at 80% approval is 19.48% against the notebook's 19.50%. The FICO-only baseline, which has no tuned settings, moves by the same amount (21.57% against 21.56%), so the gap comes from library versions. Sections 10 and 11 report the notebook's figures.
 
@@ -625,7 +628,7 @@ python -m loan_default.registry promote --version 1
 python -m loan_default.registry export --out-dir served
 ```
 
-`--register` records the run and adds the fitted pipeline to the MLflow model registry as a new version of `loan-default`. `promote` points the `champion` alias at a version; `export` writes that version as `model.joblib` and `metadata.json`, the files the service reads. Switching the served model is then a promotion and an export, with no retraining and no image rebuild:
+`--register` records the run and adds the fitted pipeline to the MLflow model registry as a new version of `loan-default`. `promote` points the `champion` alias at a version; `export` writes that version as `model.joblib` and `metadata.json`, the files the service reads. `promote` refuses a version whose test ROC-AUC is below the current champion's; `--force` overrides this for a deliberate rollback. Switching the served model is then a promotion and an export, with no retraining and no image rebuild:
 
 ```bash
 docker run --rm -p 8000:8000 --read-only -v "$PWD/served:/app/models:ro" loan-default
@@ -658,7 +661,7 @@ curl -X POST localhost:8000/predict -H 'Content-Type: application/json' -d '{
 
 Input is validated before it reaches the model: income and amount must be positive, FICO between 300 and 850, the state a two-letter code, and employment length one of the values in the data. Invalid input returns 422 with the reason. `dti_n` and `emp_length` may be omitted and are then treated as missing, as in training. A loan purpose or housing status the model has not seen is scored, not rejected.
 
-The decision applies the cutoff chosen on training data, which approves the safest 80% of training loans.
+The decision applies the cutoff chosen on training data, which approves the safest 80% of training loans. If the model returns a score that is not a probability between 0 and 1, the request fails with 500 and nothing is logged.
 
 **Prediction log.** With `PREDICTION_LOG` set to a file path, every valid prediction is appended as one JSON line: time, the hash of the model file, the application fields, and the score and decision. The drift tool compares a log with the training data:
 
@@ -694,67 +697,69 @@ ruff format --check .   # formatting
 mypy                    # static type check (strict)
 ```
 
-GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, a second job builds the Docker image, starts it read-only as a non-root user, and runs the smoke test against it.
+GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, two more jobs run:
+
+- **image** builds the Docker image, starts it read-only as a non-root user, and runs the smoke test. The smoke test sends 200 predictions and fails if the 95th-percentile latency exceeds 0.2 seconds; the job then fails if the container uses more than 600 MiB.
+- **analysis** reruns the year-by-year validation and the 2016 drift report and attaches both to the run.
+
+Two more automations:
+
+- [drift.yml](.github/workflows/drift.yml) runs every Monday against the service's prediction log, downloaded from the repository variable `PREDICTION_LOG_URL`, and fails if any input shifts by PSI 0.10 or more. GitHub notifies the repository owner of failed scheduled runs.
+- [Dependabot](.github/dependabot.yml) opens a pull request each week when a pinned package or a GitHub Action has an update; CI then tests it.
 
 ## 16. Production Readiness
 
 Scored with the ML Test Score rubric ([Breck et al., 2017](https://research.google/pubs/the-ml-test-score-a-rubric-for-ml-production-readiness-and-technical-debt-reduction/)): 28 tests in four groups. A test scores 1 if it runs automatically, in CI or on every training run; 0.5 if it was done and documented but is run by hand; 0 if it is not done. The overall score is the lowest group total, because strength in one group does not make up for a gap in another.
 
-**Features and data: 3.5**
+**Features and data: 4.5**
 
 | Test | Score | Evidence |
 |---|---:|---|
-| Feature expectations are written as a schema | 0.5 | The API enforces types, ranges and allowed values on every request; training data is not checked against it |
-| Every feature earns its place | 0.5 | Permutation importance and the `loan_to_income` ablation (sections 8, 13) |
+| Feature expectations are written as a schema | 1 | `schema.py`, enforced on every API request and on the training and test files at every training run |
+| Every feature earns its place | 1 | Every training run records each field's permutation importance on test data |
 | No feature costs more than it adds | 0.5 | ZIP code, title and description dropped with reasons (section 5) |
 | Features meet policy requirements | 0.5 | ZIP code excluded as a geographic proxy (section 12) |
 | The data pipeline has privacy controls | 0 | Public data; none built |
 | New features can be added quickly | 0.5 | One cleaning function and one column list, both under test |
 | Feature code is tested | 1 | Unit tests for cleaning, in CI |
 
-**Model development: 3.5**
+**Model development: 4.5**
 
 | Test | Score | Evidence |
 |---|---:|---|
 | The model spec is reviewed and versioned | 1 | In git, merged through pull requests, checked in CI |
 | Offline metrics track online impact | 0 | No live outcomes |
 | Hyperparameters are tuned | 0.5 | 40-configuration search, rerun with `loan_default.search` |
-| The cost of staleness is known | 0.5 | Year-by-year validation and drift report (section 11) |
-| A simpler model is not better | 1 | Every training run scores the FICO-only baseline alongside the model |
-| Quality holds on important slices | 0.5 | Error analysis by FICO, purpose and housing (section 8) |
+| The cost of staleness is known | 1 | CI reruns the year-by-year validation on every push |
+| A simpler model is not better | 1 | Training fails unless the model beats the FICO-only baseline |
+| Quality holds on important slices | 1 | Every training run records test ROC-AUC by FICO band and housing status |
 | The model is checked for inclusion | 0 | No protected-group labels (section 12) |
 
-**ML infrastructure: 4**
+**ML infrastructure: 5**
 
 | Test | Score | Evidence |
 |---|---:|---|
 | Training is reproducible | 1 | A test retrains and compares the full metadata, in CI |
 | Model code is unit tested | 1 | Training, policy, search and analysis modules, in CI |
 | The whole pipeline is integration tested | 1 | CI builds the image, which trains the model, then smoke-tests the running service |
-| Quality is checked before serving | 0 | Metrics are recorded, but nothing blocks a worse model from promotion |
+| Quality is checked before serving | 1 | Training stops if the model loses to the baseline; promotion stops if it loses to the champion |
 | A single prediction can be traced | 0.5 | Logs tie each prediction to a model hash; stepping through the pipeline is manual |
 | New models go through a canary | 0 | Not built |
-| A served model can be rolled back | 0.5 | Promote an earlier registry version and re-export (section 15) |
+| A served model can be rolled back | 0.5 | Promote an earlier registry version with `--force` and re-export (section 15) |
 
-**Monitoring: 2**
+**Monitoring: 5**
 
 | Test | Score | Evidence |
 |---|---:|---|
-| Upstream changes trigger a notification | 0 | Versions are pinned; nothing reports changes |
-| Data invariants hold in training and serving | 0.5 | Enforced on API requests only |
+| Upstream changes trigger a notification | 0.5 | Dependabot reports package and Action updates; the data source is a fixed file |
+| Data invariants hold in training and serving | 1 | The same schema is enforced on API requests and on training data |
 | Training and serving compute the same features | 1 | One fitted pipeline does both; a test checks the exported model scores identically |
-| The served model is not too stale | 0.5 | Drift and year-by-year checks exist but run by hand |
-| Outputs are numerically valid | 0 | Not checked at serving time |
-| Serving speed and memory hold steady | 0 | Not measured |
+| The served model is not too stale | 0.5 | A weekly drift job is in place; there is no live prediction log for it to read yet |
+| Outputs are numerically valid | 1 | The service rejects any score outside 0–1, with a test |
+| Serving speed and memory hold steady | 1 | CI fails on p95 latency above 0.2 s or memory above 600 MiB |
 | Prediction quality holds | 0 | Predictions are logged, but outcomes are not joined back |
 
-**Overall: 2**, set by monitoring. The three cheapest steps up all sit there and would lift the overall score to 3.5:
-
-| Change | Effect |
-|---|---|
-| Reject non-finite scores in the service, with a test | Monitoring +1 |
-| Run the log drift report on a schedule in GitHub Actions | Monitoring +0.5 |
-| Validate training data against the API schema at train time | Data +0.5, monitoring +0.5 |
+**Overall: 4.5**, up from 2. Features and model development now set it. The remaining zeros need things this project does not have: live outcomes, protected-group labels, a deployment to canary, and private data to protect.
 
 ## 17. Further Work
 
