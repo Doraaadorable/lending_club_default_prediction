@@ -1,6 +1,6 @@
 # Loan Default Prediction: Balancing Approval and Risk
 
-**Status:** Data preparation, EDA, model comparison, tuning, and final evaluation completed. Planned work is listed in [section 16](#16-planned-work).  
+**Status:** Analysis complete; the final model can be retrained, tracked, served from a container and checked for drift (sections 11 and 15). Open items are listed in [section 16](#16-further-work).  
 **Dataset:** [Lending Club loan dataset for granting models](https://zenodo.org/records/11295916)
 
 ## 1. Project Overview
@@ -401,6 +401,41 @@ Risk ranking and probability accuracy therefore need separate evaluation. The mo
 
 A next step is to assess recalibration using a recent labelled validation cohort, followed by evaluation on another untouched period.
 
+### What changed between the periods
+
+[`python -m loan_default.drift`](src/loan_default/drift.py) compares the 2016 sample with the training sample and writes [reports/drift_report.md](reports/drift_report.md).
+
+**The inputs barely changed.** The population stability index (PSI) is below 0.04 for all nine model features, against a usual threshold of 0.10 for a moderate shift. The largest values are for state (0.038) and loan purpose (0.036). Every two-sample test rejects equality (p < 0.01), but with 150,000 and 50,000 loans the tests detect differences too small to matter, so drift is read from PSI.
+
+**Loans of the same predicted risk defaulted more often.** Grouping loans into deciles of predicted risk, the 2016 default rate is higher in every band, by 1.8 percentage points in the safest band and 5.6 to 7.1 points in the riskier half.
+
+| | Default rate |
+|---|---:|
+| Training sample | 18.46% |
+| 2016, if only the mix of risk bands had changed | 18.47% |
+| 2016, actual | 23.28% |
+
+Of the 4.83-point increase, 0.02 points come from a different mix of applicants and 4.81 points from higher default rates among applicants the model scores alike. In drift terms this is a change in the relationship between inputs and outcome (concept drift), not a change in the inputs (covariate drift). It explains the pattern above: ranking held because the ordering of risk was preserved, while probabilities were too low because the overall level moved.
+
+The increase continues a trend inside the training period: 15.49% for 2013 originations, 18.13% for 2014, 20.32% for 2015. The data cannot separate two explanations. Credit quality may have worsened. Alternatively, because only resolved loans are kept and defaults resolve sooner than full repayment, recent cohorts may over-represent defaults (section 14). Monitoring input distributions alone would not have flagged this change; detecting it needs outcome labels.
+
+### Does recalibration help?
+
+[`python -m loan_default.recalibration`](src/loan_default/recalibration.py) fits a correction on loans issued in January–June 2016 and judges it on loans issued in July–December 2016 ([reports/recalibration_report.md](reports/recalibration_report.md)).
+
+| Method | Mean predicted | Actual | Brier | Mean gap over 10 risk bins | ROC-AUC |
+|---|---:|---:|---:|---:|---:|
+| No recalibration | 18.11% | 24.59% | 0.1794 | 6.48 pp | 0.6588 |
+| Intercept shift | 21.67% | 24.59% | 0.1758 | 2.92 pp | 0.6588 |
+| Platt scaling | 21.65% | 24.59% | 0.1758 | 2.95 pp | 0.6588 |
+| Isotonic | 21.66% | 24.59% | 0.1758 | 2.93 pp | 0.6579 |
+
+Recalibration removes a little over half of the gap. The three methods give the same result, so the error is a shift in level: one constant on the log-odds scale does as well as a flexible mapping. The remaining gap exists because the default rate kept rising within 2016, from 22.39% in the first half to 24.59% in the second, so a correction fitted on one period is already behind in the next.
+
+Ranking is unchanged, so the approval policy and its results in section 10 are unaffected; recalibration matters where the probability itself is used, for example in pricing or loss forecasts.
+
+Two limits apply. This check reuses the test period, so it is exploratory. And it is not a deployment recipe: outcomes of loans issued in the first half of a year are not known by its second half, so a live system would be correcting with older labels than the ones used here.
+
 ## 12. Fairness and ZIP-Code Exclusion
 
 ZIP code is excluded for statistical and ethical reasons.
@@ -469,6 +504,14 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/preprocessing.py](src/loan_default/preprocessing.py) | Shared preprocessing, used by the notebooks and by training |
 | [src/loan_default/policy.py](src/loan_default/policy.py) | Approval policy: approve the lowest-risk share of a batch |
 | [src/loan_default/train.py](src/loan_default/train.py) | Trains the final model and saves it with its metadata |
+| [src/loan_default/tracking.py](src/loan_default/tracking.py) | Records a training run in MLflow |
+| [src/loan_default/service.py](src/loan_default/service.py) | Prediction API (FastAPI) |
+| `Dockerfile`, `.dockerignore`, `constraints.txt` | Two-stage image definition and pinned versions |
+| [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
+| [src/loan_default/recalibration.py](src/loan_default/recalibration.py) | Tests three recalibration methods across the two halves of 2016; writes `reports/` |
+| [reports/](reports/) | Generated drift and recalibration reports |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | Continuous integration |
+| [scripts/smoke_test.sh](scripts/smoke_test.sh) | Checks a running service |
 | [tests/](tests/) | Unit tests for preprocessing, the policy and training |
 | [pyproject.toml](pyproject.toml) | Package definition and ruff, mypy and pytest settings |
 | [04_modeling_baseline.ipynb](notebooks/04_modeling_baseline.ipynb) | Baseline, CV, importance and error analysis |
@@ -521,26 +564,76 @@ The run takes about 20 seconds on four cores.
 
 The script reproduces notebook 05's test ROC-AUC (0.6639), Brier score (0.1706) and the baseline's scores. Its approved-loan default rate at 80% approval is **19.45%**, against 19.50% in the notebook, and its training cutoff is 0.2566 against 0.2565. The notebook's exact sampled hyperparameters were not kept, so the script uses the values printed there, rounded to four decimals. The figures in sections 10 and 11 are the notebook's.
 
+### Track experiments
+
+```bash
+python -m pip install -e ".[tracking]"
+python -m loan_default.train --track
+python -m loan_default.train --track --max-iter 200 --learning-rate 0.05
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+With `--track`, each run is recorded in MLflow: hyperparameters, every metric in `metadata.json`, the data hashes, and the two saved files. Runs go to a local SQLite database by default; `--tracking-uri` points them at a shared server. The UI compares runs side by side.
+
+### Serve predictions
+
+```bash
+python -m pip install -e ".[serve]"
+python -m loan_default.train
+uvicorn loan_default.service:app --port 8000
+```
+
+| Endpoint | Returns |
+|---|---|
+| `GET /health` | `{"status": "ok", "model": ...}`; used by the container health check |
+| `GET /metadata` | The training metadata: parameters, metrics, cutoff and data hashes |
+| `POST /predict` | The default probability for one application and the decision at the training cutoff |
+| `GET /docs` | Interactive API documentation |
+
+```bash
+curl -X POST localhost:8000/predict -H 'Content-Type: application/json' -d '{
+  "revenue": 60000, "loan_amnt": 12000, "fico_n": 690, "dti_n": 18,
+  "emp_length": "5 years", "purpose": "debt_consolidation",
+  "home_ownership_n": "RENT", "addr_state": "NY"}'
+# {"default_probability":0.1911,"decision":"approve","approval_cutoff":0.2566}
+```
+
+Input is validated before it reaches the model: income and amount must be positive, FICO between 300 and 850, the state a two-letter code, and employment length one of the values in the data. Invalid input returns 422 with the reason. `dti_n` and `emp_length` may be omitted and are then treated as missing, as in training. A loan purpose or housing status the model has not seen is scored, not rejected.
+
+The decision applies the cutoff chosen on training data. Section 11 shows the probabilities understate 2016 default levels, so the score is a ranking aid and the service is a demonstration of the deployment path, not a lending tool.
+
+**Docker**
+
+```bash
+docker build -t loan-default .
+docker run --rm -p 8000:8000 --read-only --cap-drop ALL loan-default
+scripts/smoke_test.sh
+```
+
+The build has two stages. The first trains the model from `data/`; the second installs the package and copies in only the trained model, so the served image contains no loan data. Versions are pinned in `constraints.txt`, and the container runs as a non-root user.
+
 ### Code checks
 
 ```bash
-python -m pytest        # 18 unit tests
+python -m pytest        # unit tests
 ruff check .            # lint: unused code, naming, missing type hints and docstrings
 ruff format --check .   # formatting
 mypy                    # static type check (strict)
 ```
 
-## 16. Planned Work
+GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, a second job builds the Docker image, starts it read-only as a non-root user, and runs the smoke test against it.
 
-The analysis lives in notebooks, and the final model can now be retrained with one command (section 15). The remaining steps turn it into a model that is served and monitored. None of the items below is implemented yet.
+## 16. Further Work
 
-| Step | What it adds |
+Training, experiment tracking, serving, CI, and the drift and recalibration analyses are in place (sections 11 and 15). Not implemented:
+
+| Step | What it would add |
 |---|---|
-| Experiment tracking | Log parameters, metrics and the fitted pipeline for each run |
-| Prediction service | An API that takes one application and returns a risk score, packaged in a container |
-| Continuous integration | Run the tests and code checks automatically on every push |
-| Drift analysis | Compare the 2016 cohort with the 2007–2015 training data feature by feature, to explain the calibration gap in section 11 |
-| Recalibration | Assess recalibration on a recent labelled cohort, as proposed in section 11 |
+| Chronological validation | Replace shuffled CV with folds ordered by origination year, so development scores reflect predicting later cohorts |
+| Prediction logging | Record the service's inputs and scores, so the drift comparison can run on live traffic instead of a fixed sample |
+| Model registry | Promote a tracked run to the served model by name, instead of training inside the image build |
+| Exact search results | Save the randomized search output, so the script and notebook 05 use identical hyperparameters |
+| A later untouched cohort | Confirm the recalibration and drift findings on data not used for any decision here |
 
 ## 17. Conclusion
 
@@ -548,7 +641,7 @@ Application-time features improve risk ranking beyond FICO alone.
 
 At **80% approval**, tuned gradient boosting retained 40,000 test loans with a **19.50%** default rate, compared with **21.56%** for FICO. This represents **827 fewer defaulted loans** at the same approval volume.
 
-The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. Further work should assess chronological validation, recalibration, and dependence on geographic features.
+The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Further work should assess chronological validation and dependence on geographic features.
 
 ## References
 

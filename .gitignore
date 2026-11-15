@@ -20,3 +20,9 @@ models/
 
 # Notebook 05 caches
 notebooks/results/
+
+# Local MLflow tracking data
+mlflow.db
+mlruns/
+mlartifacts/
+build/
