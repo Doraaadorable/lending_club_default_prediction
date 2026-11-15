@@ -437,6 +437,15 @@ Shuffled 5-fold CV on 2007–2015 gives ROC-AUC 0.6633 and a mean prediction exa
 
 **Calibration:** shuffled CV hid the problem. Because every fold mixes all years, predicted and actual rates match by construction. Scored year by year, the model overpredicts in 2012–2013, when defaults fell, and underpredicts from 2014, by 1.2 points and then 2.5 points. The 4.8-point gap in 2016 continues a trend that this check shows in the development data.
 
+**Tuning on year-ordered folds does not fix it.** `python -m loan_default.search --folds chronological` reruns the 40-configuration search with one fold per year from 2012 to 2015, each trained on earlier years only ([reports/search_results_chronological.csv](reports/search_results_chronological.csv)). It picks a different configuration: a lower learning rate (0.0125) and smaller trees (7 leaves). On 2016:
+
+| Tuned on | Test ROC-AUC | Test AP | Brier | Mean predicted | Default rate, safest 80% |
+|---|---:|---:|---:|---:|---:|
+| Shuffled folds (current model) | 0.6639 | 0.3599 | 0.1706 | 18.49% | 19.48% |
+| Year-ordered folds | 0.6621 | 0.3585 | 0.1712 | 18.39% | 19.53% |
+
+The two are within the spread of the search itself (the top five chronological configurations lie within 0.002 ROC-AUC), and neither moves the mean prediction toward the 23.28% observed. Hyperparameters set how risk is ranked, not the level the model expects, so the current model is kept and the calibration gap is handled by recalibration below.
+
 ### Does recalibration help?
 
 [`python -m loan_default.recalibration`](src/loan_default/recalibration.py) fits a correction on loans issued in January–June 2016 and judges it on loans issued in July–December 2016 ([reports/recalibration_report.md](reports/recalibration_report.md)).
@@ -500,7 +509,7 @@ The description-availability flag was removed because descriptions became almost
 | Only issued loans are observed | Results may differ for rejected applicants | Obtain broader application data and assess coverage |
 | Only resolved outcomes are retained | Cohorts may be selective | Seek fuller follow-up information |
 | Outcome dates are unavailable | Time splitting cannot fully reproduce historical label availability | Construct an as-of evaluation |
-| Stratified CV mixes years | CV does not simulate future deployment, and hides calibration drift (section 11) | Use chronological folds for tuning and policy selection |
+| Stratified CV mixes years | CV does not simulate future deployment, and hides calibration drift (section 11) | Report year-by-year validation next to CV; tuning on year-ordered folds did not change 2016 results |
 | Tuning and policy selection reuse development folds | Selected development scores may be optimistic | Use nested or separate validation in further work |
 | Some test information was inspected | Holdout independence is incomplete | Reserve a new cohort for confirmation |
 | DTI 999 is treated as missing | Its meaning is undocumented | Verify the code and test alternative treatments |
@@ -529,7 +538,7 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
 | [src/loan_default/recalibration.py](src/loan_default/recalibration.py) | Tests three recalibration methods across the two halves of 2016; writes `reports/` |
 | [src/loan_default/temporal.py](src/loan_default/temporal.py) | Chronological validation, year by year; writes `reports/` |
-| [src/loan_default/search.py](src/loan_default/search.py) | Reruns notebook 05's hyperparameter search; writes `reports/` |
+| [src/loan_default/search.py](src/loan_default/search.py) | Reruns notebook 05's hyperparameter search, on shuffled or year-ordered folds; writes `reports/` |
 | [reports/](reports/) | Generated drift, chronological validation, recalibration and search results |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Continuous integration |
 | [scripts/smoke_test.sh](scripts/smoke_test.sh) | Checks a running service |
@@ -677,10 +686,9 @@ GitHub Actions runs these on every push to `main` and every pull request ([ci.ym
 
 ## 16. Further Work
 
-| Step | What it would add |
-|---|---|
-| Chronological folds for tuning | Select hyperparameters and the approval cutoff on year-ordered folds, which section 11 shows track later cohorts better than shuffled CV |
-| A later untouched cohort | Confirm the drift, calibration and recalibration findings on loans not used for any decision here. Needs the raw dataset (section 15) and a cohort with enough follow-up |
+| Step | What it would add | What it needs |
+|---|---|---|
+| A later untouched cohort | Confirm the drift, calibration and recalibration findings on loans not used for any decision here | The raw dataset (section 15), and a cohort with enough follow-up that its outcomes are not selected toward early defaults (section 3) |
 
 ## 17. Conclusion
 
@@ -688,7 +696,7 @@ Application-time features improve risk ranking beyond FICO alone.
 
 At **80% approval**, tuned gradient boosting retained 40,000 test loans with a **19.50%** default rate, compared with **21.56%** for FICO. This represents **827 fewer defaulted loans** at the same approval volume.
 
-The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Chronological validation shows the underestimation building from 2014, a trend that shuffled CV hid. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Further work should tune on year-ordered folds and assess dependence on geographic features.
+The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Chronological validation shows the underestimation building from 2014, a trend that shuffled CV hid. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Tuning on year-ordered folds did not change this. Further work should confirm these findings on a later cohort and assess dependence on geographic features.
 
 ## References
 
