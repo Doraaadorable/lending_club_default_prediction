@@ -11,7 +11,7 @@ uvicorn loan_default.service:app      # serve predictions on port 8000
 | Part | Where |
 |---|---|
 | Problem, data, analysis and results | Sections 1–10, notebooks 01–05 |
-| Drift, year-by-year validation, recalibration | Section 11 |
+| Drift, year-by-year validation, recalibration, 2016 replay | Section 11 |
 | Training, tracking, registry, API, Docker, CI | Section 15 |
 | Production readiness (ML Test Score) | Section 16 |
 
@@ -475,6 +475,39 @@ Ranking is unchanged, so the approval policy and its results in section 10 are u
 
 In production the first half's outcomes would not be known by the second half, so a live correction would use older labels and lag further.
 
+### Replaying 2016 as if the model were live
+
+[`python -m loan_default.replay`](src/loan_default/replay.py) trains on 2007–2015, scores each 2016 loan in the month it was issued, writes the predictions in the service's log format, and runs both monitors on them ([reports/replay_report.md](reports/replay_report.md)).
+
+| Month | Largest input PSI | Mean predicted | Actual | Gap |
+|---|---:|---:|---:|---:|
+| 2016-01 | 0.053 | 18.34% | 19.96% | +1.62 pp |
+| 2016-02 | 0.037 | 18.94% | 19.52% | +0.58 pp |
+| 2016-03 | 0.066 | 19.15% | 22.19% | +3.04 pp |
+| 2016-04 | 0.051 | 18.43% | 25.10% | +6.67 pp |
+| 2016-05 | 0.058 | 18.98% | 25.70% | +6.72 pp |
+| 2016-06 | 0.064 | 18.27% | 25.05% | +6.78 pp |
+| 2016-07 | 0.085 | 18.60% | 26.14% | +7.54 pp |
+| 2016-08 | 0.086 | 18.38% | 25.35% | +6.97 pp |
+| 2016-09 | 0.092 | 18.02% | 25.15% | +7.13 pp |
+| 2016-10 | 0.088 | 17.51% | 23.38% | +5.87 pp |
+| 2016-11 | 0.091 | 17.80% | 22.66% | +4.86 pp |
+| 2016-12 | 0.092 | 18.19% | 24.53% | +6.34 pp |
+
+**The input monitor stays quiet while the model is wrong.** No month reaches PSI 0.10. The largest monthly value climbs from about 0.05 to 0.09, driven from July by the state mix; random training samples of one month's size score about 0.02 on state, so the shift is real but small. Run on the replayed log, the weekly drift check passes.
+
+**The outcome monitor catches it.** [`loan_default.monitor`](src/loan_default/monitor.py) joins outcomes to predictions by application id and flags any month whose actual default rate is more than 2 points from the predicted rate. It flags every month from March, and its command exits with an error.
+
+**How early it fires depends on how soon outcomes are known.** The delays below are assumptions about when a lender knows a month's default rate well enough to compare; the dataset records only the final status. Recalibration shifts the log-odds by a constant fitted on the 2016 months whose outcomes are already known.
+
+| Outcomes known after | Outcome alert fires | Mean monthly gap (points), no recalibration | Quarterly | Monthly |
+|---|---|---:|---:|---:|
+| 3 months | June 2016 | 5.3 | 3.3 | 3.1 |
+| 6 months | September 2016 | 5.3 | 4.3 | 4.2 |
+| 12 months | March 2017 | 5.3 | 5.3 | 5.3 |
+
+With a three-month delay, monthly recalibration cuts the average gap from 5.3 to 3.1 points; with a twelve-month delay nothing can be corrected within the year. The speed of outcome data, not the model, sets how quickly this kind of error is caught. An earlier signal such as missed first payments would shorten the delay, but this dataset does not record payments.
+
 ## 12. Fairness and ZIP-Code Exclusion
 
 ZIP code is excluded for statistical and ethical reasons.
@@ -550,6 +583,8 @@ The description-availability flag was removed because descriptions became almost
 | `Dockerfile`, `.dockerignore` | Two-stage image definition |
 | [src/loan_default/drift.py](src/loan_default/drift.py) | Compares the 2016 sample with the training sample; writes `reports/` |
 | [src/loan_default/recalibration.py](src/loan_default/recalibration.py) | Tests three recalibration methods across the two halves of 2016; writes `reports/` |
+| [src/loan_default/monitor.py](src/loan_default/monitor.py) | Joins outcomes to logged predictions and checks calibration by month |
+| [src/loan_default/replay.py](src/loan_default/replay.py) | Replays 2016 through the service log and both monitors; writes `reports/` |
 | [src/loan_default/temporal.py](src/loan_default/temporal.py) | Chronological validation, year by year; writes `reports/` |
 | [src/loan_default/search.py](src/loan_default/search.py) | Reruns notebook 05's hyperparameter search, on shuffled or year-ordered folds; writes `reports/` |
 | [reports/](reports/) | Generated drift, chronological validation, recalibration and search results |
@@ -663,14 +698,15 @@ Input is validated before it reaches the model: income and amount must be positi
 
 The decision applies the cutoff chosen on training data, which approves the safest 80% of training loans. If the model returns a score that is not a probability between 0 and 1, the request fails with 500 and nothing is logged.
 
-**Prediction log.** With `PREDICTION_LOG` set to a file path, every valid prediction is appended as one JSON line: time, the hash of the model file, the application fields, and the score and decision. The drift tool compares a log with the training data:
+**Prediction log.** With `PREDICTION_LOG` set to a file path, every valid prediction is appended as one JSON line: time, the hash of the model file, the application fields, and the score and decision. Send an `application_id` with each request; it is logged but not scored, and it is how outcomes are joined later. Two tools read the log:
 
 ```bash
 PREDICTION_LOG=logs/predictions.jsonl uvicorn loan_default.service:app --port 8000
-python -m loan_default.drift --current logs/predictions.jsonl    # writes reports/log_drift_report.md
+python -m loan_default.drift --current logs/predictions.jsonl                          # inputs against training data
+python -m loan_default.monitor --log logs/predictions.jsonl --outcomes outcomes.csv     # predicted against actual, by month
 ```
 
-Logged applications have no outcomes yet, so this compares inputs only. Section 11 shows the limit: in 2016 the inputs were stable while default rates rose.
+The drift check needs no outcomes but, as the 2016 replay shows, can miss a model going wrong. The outcome check catches it once outcomes arrive. Both fail with exit status 1, and [drift.yml](.github/workflows/drift.yml) runs them weekly.
 
 **Docker**
 
@@ -700,11 +736,11 @@ mypy                    # static type check (strict)
 GitHub Actions runs these on every push to `main` and every pull request ([ci.yml](.github/workflows/ci.yml)). When they pass, two more jobs run:
 
 - **image** builds the Docker image, starts it read-only as a non-root user, and runs the smoke test. The smoke test sends 200 predictions and fails if the 95th-percentile latency exceeds 0.2 seconds; the job then fails if the container uses more than 600 MiB.
-- **analysis** reruns the year-by-year validation and the 2016 drift report and attaches both to the run.
+- **analysis** reruns the year-by-year validation, the 2016 drift report and the 2016 replay, and attaches the reports to the run.
 
 Two more automations:
 
-- [drift.yml](.github/workflows/drift.yml) runs every Monday against the service's prediction log, downloaded from the repository variable `PREDICTION_LOG_URL`, and fails if any input shifts by PSI 0.10 or more. GitHub notifies the repository owner of failed scheduled runs.
+- [drift.yml](.github/workflows/drift.yml) runs every Monday against the service's prediction log, downloaded from the repository variable `PREDICTION_LOG_URL`. It fails if any input shifts by PSI 0.10 or more, or, when `OUTCOMES_URL` is also set, if any month's default rate is more than 2 points from the prediction. GitHub notifies the repository owner of failed scheduled runs.
 - [Dependabot](.github/dependabot.yml) opens a pull request each week when a pinned package or a GitHub Action has an update; CI then tests it.
 
 ## 16. Production Readiness
@@ -747,7 +783,7 @@ Scored with the ML Test Score rubric ([Breck et al., 2017](https://research.goog
 | New models go through a canary | 0 | Not built |
 | A served model can be rolled back | 0.5 | Promote an earlier registry version with `--force` and re-export (section 15) |
 
-**Monitoring: 5**
+**Monitoring: 5.5**
 
 | Test | Score | Evidence |
 |---|---:|---|
@@ -757,7 +793,7 @@ Scored with the ML Test Score rubric ([Breck et al., 2017](https://research.goog
 | The served model is not too stale | 0.5 | A weekly drift job is in place; there is no live prediction log for it to read yet |
 | Outputs are numerically valid | 1 | The service rejects any score outside 0–1, with a test |
 | Serving speed and memory hold steady | 1 | CI fails on p95 latency above 0.2 s or memory above 600 MiB |
-| Prediction quality holds | 0 | Predictions are logged, but outcomes are not joined back |
+| Prediction quality holds | 0.5 | `loan_default.monitor` joins outcomes by application id and fails on a monthly gap above 2 points; CI runs it on the 2016 replay, and there are no live outcomes yet |
 
 **Overall: 4.5**, up from 2. Features and model development now set it. The remaining zeros need things this project does not have: live outcomes, protected-group labels, a deployment to canary, and private data to protect.
 
@@ -773,7 +809,7 @@ Application-time features improve risk ranking beyond FICO alone.
 
 At **80% approval**, tuned gradient boosting retained 40,000 test loans with a **19.50%** default rate, compared with **21.56%** for FICO. This represents **827 fewer defaulted loans** at the same approval volume.
 
-The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Chronological validation shows the underestimation building from 2014, a trend that shuffled CV hid. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Tuning on year-ordered folds did not change this. Further work should confirm these findings on a later cohort and assess dependence on geographic features.
+The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Chronological validation shows the underestimation building from 2014, a trend that shuffled CV hid. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Tuning on year-ordered folds did not change this. Replaying 2016 as if the model were live, input monitoring stays green all year; only a check against outcomes catches the error, and only as fast as outcomes arrive. Further work should confirm these findings on a later cohort and assess dependence on geographic features.
 
 ## References
 
