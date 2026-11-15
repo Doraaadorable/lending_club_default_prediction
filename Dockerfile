@@ -4,9 +4,9 @@ FROM python:3.13-slim AS train
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 
-COPY constraints.txt pyproject.toml ./
+COPY requirements.txt pyproject.toml ./
 COPY src ./src
-RUN pip install -c constraints.txt .
+RUN pip install -c requirements.txt .
 
 COPY data/train.csv data/test.csv ./data/
 RUN python -m loan_default.train --out-dir /build/models
@@ -23,9 +23,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY constraints.txt pyproject.toml ./
+COPY requirements.txt pyproject.toml ./
 COPY src ./src
-RUN pip install -c constraints.txt ".[serve]"
+RUN pip install -c requirements.txt ".[serve]"
 
 COPY --from=train /build/models ./models
 
