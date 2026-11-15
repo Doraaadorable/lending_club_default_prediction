@@ -103,7 +103,7 @@ def model_metadata() -> dict[str, Any]:
 def predict(application: LoanApplication) -> Prediction:
     """Score one application; approve it if its default probability is at or below the cutoff."""
     model, metadata = artifacts()
-    row = pd.DataFrame([application.model_dump()])
+    row = pd.DataFrame([application.model_dump(exclude={"application_id"})])
     probability = float(model.predict_proba(row)[0, 1])
     if not math.isfinite(probability) or not 0 <= probability <= 1:
         raise HTTPException(status_code=500, detail=f"model returned an invalid score: {probability}")

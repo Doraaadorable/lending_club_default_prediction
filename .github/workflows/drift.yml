@@ -6,6 +6,8 @@ name: Drift check
 #
 # Set the repository variable PREDICTION_LOG_URL to where the service's prediction log
 # can be downloaded. Without it the job reports that there is nothing to check.
+# Set OUTCOMES_URL as well (a CSV of application_id and default) to also check that
+# each month's actual default rate stays within 2 points of the predicted rate.
 
 on:
   schedule:
@@ -41,6 +43,13 @@ jobs:
       - name: Compare with the training data
         if: steps.fetch.outputs.found == 'true'
         run: python -m loan_default.drift --current predictions.jsonl --out-dir drift --fail-on moderate
-      - name: Add the report to the run summary
+      - name: Compare predictions with known outcomes
+        if: steps.fetch.outputs.found == 'true' && vars.OUTCOMES_URL != ''
+        env:
+          OUTCOMES_URL: ${{ vars.OUTCOMES_URL }}
+        run: |
+          curl -sfL "$OUTCOMES_URL" -o outcomes.csv
+          python -m loan_default.monitor --log predictions.jsonl --outcomes outcomes.csv --out-dir drift
+      - name: Add the reports to the run summary
         if: always() && steps.fetch.outputs.found == 'true'
-        run: cat drift/log_drift_report.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat drift/*.md >> "$GITHUB_STEP_SUMMARY"
