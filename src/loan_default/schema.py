@@ -36,9 +36,15 @@ class LoanApplication(BaseModel):
     purpose: str = Field(min_length=1, description="Loan purpose, e.g. debt_consolidation, credit_card, car")
     home_ownership_n: str = Field(min_length=1, description="RENT, MORTGAGE, OWN or OTHER")
     addr_state: str = Field(pattern="^[A-Z]{2}$", description="Two-letter US state code")
+    application_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Your reference for the application; logged so outcomes can be joined to predictions later",
+    )
 
 
-FIELDS = list(LoanApplication.model_fields)
+# The fields the model reads; application_id is only carried into the prediction log.
+FIELDS = [name for name in LoanApplication.model_fields if name != "application_id"]
 _many = TypeAdapter(list[LoanApplication])
 
 

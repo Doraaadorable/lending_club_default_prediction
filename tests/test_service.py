@@ -143,3 +143,15 @@ def test_invalid_model_output_is_an_error_not_a_decision(
     assert response.status_code == 500
     assert "invalid score" in response.json()["detail"]
     assert not log.exists()
+
+
+def test_application_id_is_logged_but_not_scored(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "predictions.jsonl"
+    monkeypatch.setenv("PREDICTION_LOG", str(log))
+    with_id = client.post("/predict", json={**APPLICATION, "application_id": "loan-42"}).json()
+    without_id = client.post("/predict", json=APPLICATION).json()
+    assert with_id == without_id
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    assert records[0]["application_id"] == "loan-42" and records[1]["application_id"] is None
