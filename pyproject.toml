@@ -11,12 +11,15 @@ dependencies = [
     "numpy",
     "pandas",
     "scikit-learn>=1.4",
+    "scipy",
     "joblib",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "mypy"]
-notebooks = ["matplotlib", "jupyter", "scipy", "threadpoolctl"]
+dev = ["pytest", "ruff", "mypy", "httpx"]
+tracking = ["mlflow"]
+serve = ["fastapi", "uvicorn"]
+notebooks = ["matplotlib", "jupyter", "threadpoolctl"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -53,5 +56,5 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib.*", "pandas.*"]  # no bundled type information in this environment
+module = ["sklearn.*", "joblib.*", "pandas.*", "mlflow.*", "scipy.*"]  # no bundled type information in this environment
 ignore_missing_imports = true

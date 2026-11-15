@@ -64,7 +64,10 @@ def test_overlapping_ids_are_rejected(config: TrainConfig, tmp_path: Path) -> No
 
 
 def test_command_line_overrides_defaults() -> None:
-    config = parse_args(["--out-dir", "elsewhere", "--approval-rate", "0.5"])
+    config, args = parse_args(["--out-dir", "elsewhere", "--approval-rate", "0.5", "--max-iter", "50"])
     assert config.out_dir == Path("elsewhere")
     assert config.approval_rate == 0.5
     assert config.train_path == Path("data/train.csv")
+    assert config.model_params["max_iter"] == 50
+    assert config.model_params["learning_rate"] == 0.0249
+    assert args.track is False
