@@ -56,3 +56,29 @@ def test_promoted_version_is_the_one_exported(tmp_path: Path, monkeypatch: pytes
     promote(2, name="demo", tracking_uri=uri)
     assert export(tmp_path / "served", name="demo", tracking_uri=uri) == 2
     assert joblib.load(tmp_path / "served" / "model.joblib").predict(pd.DataFrame({"x": [0.9]}))[0] == 0
+
+
+def test_the_project_pipeline_can_be_registered_and_exported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real pipeline contains types MLflow's model format must be told to trust."""
+    from loan_default.train import TrainConfig, train
+
+    monkeypatch.chdir(tmp_path)
+    data = Path(__file__).resolve().parents[1] / "data"
+    pd.read_csv(data / "train.csv", nrows=3000, low_memory=False).to_csv(tmp_path / "train.csv", index=False)
+    pd.read_csv(data / "test.csv", nrows=500, low_memory=False).to_csv(tmp_path / "test.csv", index=False)
+    config = TrainConfig(
+        train_path=tmp_path / "train.csv",
+        test_path=tmp_path / "test.csv",
+        out_dir=tmp_path / "run",
+        model_params={"max_iter": 20, "max_leaf_nodes": 7},
+    )
+    metadata = train(config)
+    uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    log_run(metadata, config.out_dir, tracking_uri=uri, experiment="test", register_as="loans")
+    promote(1, name="loans", tracking_uri=uri)
+    export(tmp_path / "served", name="loans", tracking_uri=uri)
+
+    served = joblib.load(tmp_path / "served" / "model.joblib")
+    original = joblib.load(config.out_dir / "model.joblib")
+    rows = pd.read_csv(config.test_path, low_memory=False).drop(columns=["Default"]).head(20)
+    np.testing.assert_allclose(served.predict_proba(rows), original.predict_proba(rows))
