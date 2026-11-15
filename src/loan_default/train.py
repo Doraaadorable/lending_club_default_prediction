@@ -38,14 +38,15 @@ from loan_default.policy import approve_safest, cutoff_at, policy_results
 from loan_default.preprocessing import build_preprocessor, load_split
 from loan_default.tracking import DEFAULT_MODEL_NAME, DEFAULT_TRACKING_URI, log_run
 
-# Best of the 40 configurations in notebook 05's randomized search, as printed there (4 decimals).
+# Best of the 40 configurations in notebook 05's randomized search, at full precision.
+# Reproduced by `python -m loan_default.search`; all 40 are in reports/search_results.csv.
 TUNED_PARAMS: dict[str, float | int] = {
-    "learning_rate": 0.0249,
+    "learning_rate": 0.024918939689346737,
     "max_iter": 510,
     "max_leaf_nodes": 15,
     "min_samples_leaf": 337,
-    "l2_regularization": 0.0257,
-    "max_features": 0.5823,
+    "l2_regularization": 0.025720264197882346,
+    "max_features": 0.5823279265714709,
 }
 
 
