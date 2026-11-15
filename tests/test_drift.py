@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -77,3 +79,24 @@ def test_gap_within_bands_is_attributed_to_bands() -> None:
     assert gap.from_mix == pytest.approx(0.0)
     assert gap.within_bands == pytest.approx(0.10)
     assert bands["change"].tolist() == pytest.approx([0.10, 0.10])
+
+
+def test_prediction_log_is_compared_on_inputs_only(tmp_path: Path) -> None:
+    from loan_default.drift import feature_drift, load_prediction_log, render_log_report
+    from loan_default.preprocessing import load_split
+
+    X_train, _ = load_split(Path(__file__).resolve().parents[1] / "data" / "train.csv")
+    reference = X_train.head(3000)
+    shifted = reference.head(500).assign(fico_n=reference["fico_n"].head(500) + 60)
+    log = tmp_path / "predictions.jsonl"
+    columns = ["revenue", "loan_amnt", "fico_n", "dti_n", "emp_length", "purpose", "home_ownership_n", "addr_state"]
+    shifted[columns].assign(timestamp="2026-01-01T00:00:00+00:00", default_probability=0.2).to_json(
+        log, orient="records", lines=True
+    )
+
+    logged = load_prediction_log(log)
+    features = feature_drift(reference, logged).set_index("feature")
+    assert features.loc["fico_n", "reading"] == "large"
+    assert features.loc["home_ownership_n", "reading"] == "stable"
+    report = render_log_report(features.reset_index(), logged, log)
+    assert "500 logged applications" in report and "`fico_n`" in report

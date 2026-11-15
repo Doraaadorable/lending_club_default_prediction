@@ -3,6 +3,7 @@
     python -m loan_default.train                       # data/ -> models/
     python -m loan_default.train --out-dir somewhere
     python -m loan_default.train --track               # also record the run in MLflow
+    python -m loan_default.train --register            # record the run and add it to the model registry
 
 Fits the tuned gradient boosting pipeline chosen in notebook 05 on the
 2007-2015 sample, evaluates it on the 2016 sample next to the FICO-only
@@ -35,16 +36,17 @@ from sklearn.preprocessing import StandardScaler
 
 from loan_default.policy import approve_safest, cutoff_at, policy_results
 from loan_default.preprocessing import build_preprocessor, load_split
-from loan_default.tracking import DEFAULT_TRACKING_URI, log_run
+from loan_default.tracking import DEFAULT_MODEL_NAME, DEFAULT_TRACKING_URI, log_run
 
-# Best of the 40 configurations in notebook 05's randomized search, as printed there (4 decimals).
+# Best of the 40 configurations in notebook 05's randomized search, at full precision.
+# Reproduced by `python -m loan_default.search`; all 40 are in reports/search_results.csv.
 TUNED_PARAMS: dict[str, float | int] = {
-    "learning_rate": 0.0249,
+    "learning_rate": 0.024918939689346737,
     "max_iter": 510,
     "max_leaf_nodes": 15,
     "min_samples_leaf": 337,
-    "l2_regularization": 0.0257,
-    "max_features": 0.5823,
+    "l2_regularization": 0.025720264197882346,
+    "max_features": 0.5823279265714709,
 }
 
 
@@ -172,6 +174,9 @@ def parse_args(argv: list[str] | None = None) -> tuple[TrainConfig, argparse.Nam
     parser.add_argument("--max-iter", type=int, help="override the tuned number of boosting iterations")
     parser.add_argument("--track", action="store_true", help="record the run in MLflow")
     parser.add_argument("--tracking-uri", default=DEFAULT_TRACKING_URI, help="MLflow tracking URI")
+    parser.add_argument(
+        "--register", action="store_true", help="record the run and register the model (implies --track)"
+    )
     args = parser.parse_args(argv)
 
     params = dict(TUNED_PARAMS)
@@ -201,9 +206,12 @@ def main(argv: list[str] | None = None) -> None:
         f"{test['default_rate_approved']:.2%} (FICO only {fico['default_rate_approved']:.2%})"
     )
     print(f"Approval cutoff from training data: {metadata['approval_cutoff']:.4f}")
-    if args.track:
-        run_id = log_run(metadata, config.out_dir, tracking_uri=args.tracking_uri)
+    if args.track or args.register:
+        register_as = DEFAULT_MODEL_NAME if args.register else None
+        run_id = log_run(metadata, config.out_dir, tracking_uri=args.tracking_uri, register_as=register_as)
         print(f"Logged MLflow run {run_id} to {args.tracking_uri}")
+        if register_as:
+            print(f"Registered as a new version of '{register_as}'")
 
 
 if __name__ == "__main__":

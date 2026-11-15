@@ -5,7 +5,7 @@ import joblib
 import pandas as pd
 import pytest
 
-from loan_default.train import TrainConfig, parse_args, train
+from loan_default.train import TUNED_PARAMS, TrainConfig, parse_args, train
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 FAST_PARAMS: dict[str, float | int] = {"max_iter": 20, "max_leaf_nodes": 7}
@@ -69,5 +69,5 @@ def test_command_line_overrides_defaults() -> None:
     assert config.approval_rate == 0.5
     assert config.train_path == Path("data/train.csv")
     assert config.model_params["max_iter"] == 50
-    assert config.model_params["learning_rate"] == 0.0249
+    assert config.model_params["learning_rate"] == TUNED_PARAMS["learning_rate"]
     assert args.track is False
