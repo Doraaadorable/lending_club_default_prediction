@@ -170,3 +170,19 @@ def test_a_categorical_field_that_goes_entirely_missing_is_flagged() -> None:
     current = X.sample(500, random_state=1).assign(purpose=np.nan)
     table = feature_drift(reference, current)
     assert "purpose" in drifted_features(table, "large")
+
+
+def test_a_flag_that_takes_a_new_value_is_a_shift() -> None:
+    from loan_default.drift import numeric_psi, psi_label
+
+    reference = pd.Series([0.0, 1.0] * 200)
+    assert psi_label(numeric_psi(reference, pd.Series([0.0, 2.0] * 100))) == "large"
+    assert numeric_psi(reference, pd.Series([0.0, 1.0] * 100)) == pytest.approx(0.0)
+
+
+def test_a_side_with_no_values_is_invalid_not_an_exception() -> None:
+    from loan_default.drift import numeric_psi, psi_label
+
+    empty, values = pd.Series([np.nan] * 10), pd.Series([1.0, 2.0, 3.0] * 10)
+    assert psi_label(numeric_psi(empty, values)) == "invalid"
+    assert psi_label(numeric_psi(values, empty)) == "invalid"

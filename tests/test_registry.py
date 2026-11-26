@@ -120,3 +120,14 @@ def test_each_export_is_a_new_release_and_current_points_at_the_latest(
     assert json.loads((second / "metadata.json").read_text())["registered_model"]["version"] == 2
     assert (tmp_path / "served" / "current").is_symlink()
     assert not list((tmp_path / "served").glob(".current*"))  # no half-written link is left behind
+
+
+def test_a_current_link_to_a_missing_release_is_an_error_not_a_fallback(tmp_path: Path) -> None:
+    (tmp_path / "model.joblib").write_text("old layout left behind")
+    (tmp_path / "current").symlink_to("releases/gone", target_is_directory=True)
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        release_dir(tmp_path)
+
+
+def test_a_directory_without_current_is_served_as_it_is(tmp_path: Path) -> None:
+    assert release_dir(tmp_path) == tmp_path
