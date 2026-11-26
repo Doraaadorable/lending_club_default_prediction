@@ -60,15 +60,23 @@ def promote(
     client.set_registered_model_alias(name, alias, str(version))
 
 
+RELEASES = "releases"
+CURRENT = "current"
+
+
 def export(
     out_dir: Path, name: str = DEFAULT_MODEL_NAME, alias: str = DEFAULT_ALIAS, tracking_uri: str = DEFAULT_TRACKING_URI
 ) -> int:
-    """Write the model version behind `alias` and its training metadata to `out_dir`; return the version.
+    """Publish the model version behind `alias`, with its training metadata, as one release; return the version.
 
-    The alias is resolved once, and the model and metadata are both taken from that version, so a
-    promotion during the export cannot mix two versions. Each file is written under a temporary name
-    and moved into place. A running service caches the model: restart it to serve the new export.
+    The alias is resolved once, and the model and metadata both come from that version. They are written
+    into a new directory `out_dir/releases/v<version>-<id>/` that is never modified afterwards; then the
+    symbolic link `out_dir/current` is switched to it in one atomic rename. A reader that resolves
+    `current` once (as the service does) always gets a model and a cutoff from the same release, even if
+    an export is running or was interrupted. A running service caches its release: restart it to serve
+    the new one.
     """
+    import os
     import tempfile
 
     import mlflow
@@ -78,18 +86,22 @@ def export(
     mlflow.set_tracking_uri(tracking_uri)
     version = MlflowClient(tracking_uri).get_model_version_by_alias(name, alias)
     model = mlflow.sklearn.load_model(f"models:/{name}/{version.version}")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    releases = out_dir / RELEASES
+    releases.mkdir(parents=True, exist_ok=True)
+    release = Path(tempfile.mkdtemp(prefix=f"v{version.version}-", dir=releases))
     with tempfile.TemporaryDirectory() as staging:
         downloaded = mlflow.artifacts.download_artifacts(
             run_id=version.run_id, artifact_path="metadata.json", dst_path=staging, tracking_uri=tracking_uri
         )
         metadata = json.loads(Path(downloaded).read_text())
     metadata["registered_model"] = {"name": name, "version": int(version.version), "alias": alias}
-    model_tmp, metadata_tmp = out_dir / ".model.joblib.tmp", out_dir / ".metadata.json.tmp"
-    joblib.dump(model, model_tmp)
-    metadata_tmp.write_text(json.dumps(metadata, indent=2) + "\n")
-    model_tmp.replace(out_dir / "model.joblib")
-    metadata_tmp.replace(out_dir / "metadata.json")
+    joblib.dump(model, release / "model.joblib")
+    (release / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    release.chmod(0o755)
+    link = out_dir / f".{CURRENT}.{os.getpid()}.tmp"
+    link.unlink(missing_ok=True)
+    link.symlink_to(Path(RELEASES) / release.name, target_is_directory=True)
+    link.replace(out_dir / CURRENT)  # atomic switch: readers see the old release or the new one, never a mix
     return int(version.version)
 
 

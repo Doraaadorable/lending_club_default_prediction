@@ -69,7 +69,7 @@ def test_an_outcome_listed_twice_is_an_error() -> None:
         join_outcomes(log, outcomes)
 
 
-def test_a_rescored_application_counts_once_at_its_latest_score() -> None:
+def test_a_rescored_application_counts_once_at_its_first_score() -> None:
     log = pd.DataFrame(
         {
             "timestamp": ["2026-01-20", "2026-01-05", "2026-01-07"],
@@ -80,7 +80,7 @@ def test_a_rescored_application_counts_once_at_its_latest_score() -> None:
     outcomes = pd.DataFrame({"application_id": ["1", "2"], "default": [1, 0]})
     joined = join_outcomes(log, outcomes)
     assert len(joined) == 2
-    assert sorted(joined["default_probability"]) == [0.2, 0.4]
+    assert sorted(joined["default_probability"]) == [0.1, 0.2]
 
 
 def test_no_matched_outcome_fails_instead_of_passing(tmp_path: Path) -> None:
@@ -91,3 +91,28 @@ def test_no_matched_outcome_fails_instead_of_passing(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as stop:
         main(["--log", str(log), "--outcomes", str(outcomes), "--out-dir", str(tmp_path)])
     assert stop.value.code == 2
+
+
+def test_a_prediction_without_a_time_never_replaces_a_valid_one() -> None:
+    log = pd.DataFrame(
+        {"timestamp": ["2026-01-05T10:00:00", None], "application_id": ["1", "1"], "default_probability": [0.1, 0.2]}
+    )
+    joined = join_outcomes(log, pd.DataFrame({"application_id": ["1"], "default": [1]}))
+    assert joined["default_probability"].tolist() == [0.1]
+    assert len(calibration_by_month(joined)) == 1
+
+
+def test_only_unusable_predictions_fail_instead_of_passing(tmp_path: Path) -> None:
+    log = tmp_path / "log.jsonl"
+    log.write_text('{"timestamp": null, "application_id": "1", "default_probability": 0.1}\n')
+    outcomes = tmp_path / "outcomes.csv"
+    outcomes.write_text("application_id,default\n1,1\n")
+    with pytest.raises(SystemExit) as stop:
+        main(["--log", str(log), "--outcomes", str(outcomes), "--out-dir", str(tmp_path)])
+    assert stop.value.code == 2
+
+
+def test_an_outcome_that_is_not_binary_is_an_error() -> None:
+    log = pd.DataFrame({"timestamp": ["2026-01-05"], "application_id": ["1"], "default_probability": [0.1]})
+    with pytest.raises(ValueError, match="0 \\(repaid\\) or 1"):
+        join_outcomes(log, pd.DataFrame({"application_id": ["1"], "default": [2]}))

@@ -24,7 +24,7 @@ import pandas as pd
 from numpy.typing import NDArray
 from sklearn.metrics import brier_score_loss
 
-from loan_default.drift import PSI_MODERATE, feature_drift
+from loan_default.drift import MISSING_MODERATE, PSI_MODERATE, drifted_features, feature_drift
 from loan_default.monitor import DEFAULT_MAX_GAP, calibration_by_month, join_outcomes, months_over
 from loan_default.preprocessing import load_split
 from loan_default.recalibration import fit_intercept_shift
@@ -48,13 +48,22 @@ def build_log(X: pd.DataFrame, scores: NDArray[np.float64], cutoff: float, model
 
 
 def monthly_input_drift(X_train: pd.DataFrame, X_current: pd.DataFrame) -> pd.DataFrame:
-    """For each month of current applications: the largest feature PSI against training data, and its feature."""
+    """For each month: the largest feature PSI against training data, its feature, and whether the drift rule fires."""
     months = pd.to_datetime(X_current["issue_d"]).dt.to_period("M").astype(str)
     rows = []
     for month in sorted(months.unique()):
         features = feature_drift(X_train, X_current[months == month])
         top = features.iloc[0]
-        rows.append({"month": month, "max_psi": float(top["psi"]), "max_psi_feature": str(top["feature"])})
+        flagged = drifted_features(features, "moderate")  # the same rule as the weekly drift check
+        rows.append(
+            {
+                "month": month,
+                "max_psi": float(top["psi"]),
+                "max_psi_feature": str(top["feature"]),
+                "input_alert": bool(flagged),
+                "alert_features": ", ".join(flagged),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -116,7 +125,7 @@ def alert_month(first_flagged: str | None, lag: int) -> str:
 
 def render(monthly: pd.DataFrame, policies: pd.DataFrame, first_flagged: str | None, max_gap: float) -> str:
     """Markdown report of the replay."""
-    input_alerts = monthly.loc[monthly["max_psi"] >= PSI_MODERATE, "month"].tolist()
+    input_alerts = monthly.loc[monthly["input_alert"], "month"].tolist()
     lines = [
         "# 2016 replay",
         "",
@@ -136,7 +145,8 @@ def render(monthly: pd.DataFrame, policies: pd.DataFrame, first_flagged: str | N
         )
     lines += [
         "",
-        f"Input monitor (PSI ≥ {PSI_MODERATE:.2f}): "
+        f"Input monitor (the weekly check's rule: PSI ≥ {PSI_MODERATE:.2f}, a change of {MISSING_MODERATE:.0%} or more "
+        "in the share missing, or an invalid reading): "
         + (f"fires in {', '.join(input_alerts)}." if input_alerts else "never fires."),
         "",
         f"Outcome monitor (gap > {max_gap * 100:.0f} points): first month over the limit is {first_flagged or 'none'}.",
