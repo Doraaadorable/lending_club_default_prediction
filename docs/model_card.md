@@ -49,18 +49,18 @@ The training set is 150,000 loans issued from 2007 to 2015 (default rate 18.5%),
 | Default rate, safest 80% | 19.5% | 21.6% |
 | Mean predicted against actual default | 18.5% vs 23.3% | |
 
-At the same volume of 40,000 approvals, the model approves 827 fewer loans that later defaulted. The fairness audit by group is in [reports/fairness_report.md](../reports/fairness_report.md) and README section 13.
+At the same volume of 40,000 approvals, the model approves 827 fewer loans that later defaulted (notebook 05; the current package run gives 836, from library-version differences, README section 16). The fairness audit by group is in [reports/fairness_report.md](../reports/fairness_report.md) and README section 13.
 
 ## Explanations
 
-TreeSHAP values break each score into one contribution per application field. For a declined applicant, the fields that raised the score most become reason codes, which is the form an adverse action notice requires. See `loan_default.explain` and [reports/explainability_report.md](../reports/explainability_report.md).
+TreeSHAP values break each score into one contribution per application field. For any applicant, the report lists the fields that raised the score most. These are model contributions measured against an average applicant, not validated decline reasons: they are not tied to the cutoff, related fields can repeat one mechanism, and the wording has not been reviewed. The service does not return them. See `loan_default.explain` and [reports/explainability_report.md](../reports/explainability_report.md).
 
 ## Ethical considerations
 
 - **Proxy discrimination.** ZIP code is excluded because it can stand in for race; testing showed it adds no accuracy (README section 12.2). State is still used; removing it is compared in the fairness report.
 - **No protected attributes.** A real deployment must audit approval and error rates by protected class, for example using BISG proxy estimates under compliance supervision, before use.
 - **Selection bias.** The model learned only from approved loans, so its risk estimates for applicant types that were rarely approved (for example FICO below 660) rest on little evidence.
-- **Group-specific cutoffs.** The fairness report shows the trade-off from equal-opportunity cutoffs by income band. Under US fair-lending law, cutoffs that differ by a protected characteristic would be disparate treatment, so that mitigation is for analysis only.
+- **Group-specific cutoffs.** The fairness report shows the trade-off from equal-opportunity cutoffs by income band. Cutoffs that differ by group raise legal questions under fair-lending law, especially for protected characteristics, so that mitigation is an analysis, not a policy to deploy without legal review.
 
 ## Caveats and recommendations
 

@@ -13,11 +13,11 @@ Lending Club approves or rejects personal-loan applications. Approving too freel
 | User | Need | What the project provides |
 |---|---|---|
 | Credit-policy team | Choose an approval rate and see its default rate | Approval curves and the 80% policy (README sections 7-10) |
-| Underwriters | Know why a score is high | Per-applicant SHAP contributions and reason codes (`loan_default.explain`) |
-| Compliance and fair-lending officers | Evidence that the policy does not disadvantage groups without justification; adverse action reasons | Fairness audit (`loan_default.fairness`), ZIP-code exclusion, reason codes, model card |
+| Underwriters | Know why a score is high | Per-applicant SHAP contributions (`loan_default.explain`) |
+| Compliance and fair-lending officers | Evidence that the policy does not disadvantage groups without justification; adverse action reasons | Fairness audit (`loan_default.fairness`), ZIP-code exclusion, model card; adverse action reasons are not yet built |
 | Model risk management (validation) | Reproducible training, documented assumptions, monitoring | Data hashes in metadata, MLflow runs, CI, drift and outcome monitors, ML Test Score (README section 17) |
 | Engineering / MLOps | A service that is safe to deploy and roll back | FastAPI service, Docker image, MLflow registry with champion alias, smoke and latency tests |
-| Applicants | A fast decision and, if declined, the main reasons | Sub-0.2 s p95 scoring; reason codes for declines |
+| Applicants | A fast decision and, if declined, the main reasons | Sub-0.2 s p95 scoring; decline reasons are future work (README section 18) |
 
 ## 3. Success metrics
 
@@ -27,9 +27,9 @@ Model metrics are only useful if they move a business metric, so the two are tra
 |---|---|---|---|
 | Business | Default rate among approved loans at a fixed approval rate | Below the FICO-only screen at the same rate (19.5% vs 21.6% at 80% on 2016) | `train.py` metadata, README section 10 |
 | Business | Defaults avoided at the same volume | 827 fewer defaults per 40,000 approvals vs FICO | README section 10 |
-| Model | ROC-AUC, average precision | Must beat the FICO baseline, or training stops | `train.py` |
+| Model | ROC-AUC, average precision | Training stops unless test ROC-AUC beats the FICO baseline; AP is reported, not gated | `train.py` |
 | Model | Calibration gap (mean predicted minus actual) | Within 2 points per month, or the monitor alerts | `monitor.py` |
-| Fairness | Adverse impact ratio by group | At or above 0.8 (four-fifths rule of thumb) for every audited group | `fairness.py` |
+| Fairness | Adverse impact ratio by group | Ratios below 0.8 (a screening threshold, not a legal test) trigger a review | `fairness.py` |
 | Operations | p95 latency, memory | Below 0.2 s and 600 MiB, or CI fails | `ci.yml` |
 | Operations | Input drift (PSI) | Below 0.10 per feature, or the weekly job fails | `drift.yml` |
 
@@ -44,7 +44,7 @@ Model metrics are only useful if they move a business metric, so the two are tra
 | Stage | What happens | Exit criterion |
 |---|---|---|
 | 1. Shadow | The service scores live applications; underwriters decide as today; every score is logged | Two months of logs; drift job green; latency within budget |
-| 2. Champion / challenger | A share of applications (e.g. 10%) is decided by the model; the rest by the current process | Approved-loan default rate (on early-payment signals) no worse than the current process; adverse impact ratios at or above 0.8 |
+| 2. Champion / challenger | A share of applications (e.g. 10%) is decided by the model; the rest by the current process | Approved-loan default rate (on early-payment signals) no worse than the current process; any group below the 0.8 screening ratio reviewed and explained |
 | 3. Full use with human review | The model decides; applications near the cutoff go to an underwriter | Monthly calibration gap within 2 points; quarterly fairness audit passes |
 | Rollback | `registry promote --version <previous> --force`, then `export` | Any guardrail breached |
 
@@ -55,8 +55,8 @@ Outcomes arrive slowly (a default can take many months), so stage 2 needs an ear
 | Risk | Mitigation |
 |---|---|
 | Probabilities run low in a later cohort (seen in 2016) | Outcome monitor by month; recalibration tested (README section 11) |
-| Bias against groups correlated with protected classes | ZIP code excluded; fairness audit with four-fifths check; state-removal comparison |
-| Model learns only from approved loans (selection bias) | Documented; semi-supervised experiment shows how unlabeled applications could be used; reject inference needs rejected-application data |
+| Bias against groups correlated with protected classes | ZIP code excluded; fairness audit with a 0.8 screening threshold; state-removal comparison; legal review before launch |
+| Model learns only from approved loans (selection bias) | Documented; the semi-supervised experiment (labels hidden at random) tests methods for unlabeled loans but not reject inference, which needs rejected-application data |
 | Confusing correlation with cause in policy decisions | Causal analysis of loan size relative to income, with refutation tests and stated assumptions |
 | Silent breakage of the service | Schema validation, CI smoke test, numeric output check, health endpoint |
 
