@@ -35,7 +35,7 @@ Model metrics are only useful if they move a business metric, so the two are tra
 
 ## 4. Scope
 
-**In scope (this release):** scoring applications at the time of application, an approval rule at a chosen approval rate, explanations, monitoring, and offline analyses of the techniques covered in the course.
+**In scope (this release):** scoring applications at the time of application, an approval rule at a chosen approval rate, explanations, monitoring, and offline analyses of further modeling techniques (README section 12).
 
 **Out of scope:** interest-rate pricing, loan term choice, profit optimization (returns and recoveries are not in the data), collections, and any use of the score outside the application decision.
 
