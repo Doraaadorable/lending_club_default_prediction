@@ -60,3 +60,34 @@ def test_command_line_fails_when_a_month_is_off(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exit_info:
         main(["--log", str(log), "--outcomes", str(outcomes), "--out-dir", str(tmp_path / "out")])
     assert exit_info.value.code == 1
+
+
+def test_an_outcome_listed_twice_is_an_error() -> None:
+    log = pd.DataFrame({"timestamp": ["2026-01-05"], "application_id": ["1"], "default_probability": [0.1]})
+    outcomes = pd.DataFrame({"application_id": ["1", "1"], "default": [0, 1]})
+    with pytest.raises(ValueError, match="more than once"):
+        join_outcomes(log, outcomes)
+
+
+def test_a_rescored_application_counts_once_at_its_latest_score() -> None:
+    log = pd.DataFrame(
+        {
+            "timestamp": ["2026-01-20", "2026-01-05", "2026-01-07"],
+            "application_id": ["1", "1", "2"],
+            "default_probability": [0.4, 0.1, 0.2],
+        }
+    )
+    outcomes = pd.DataFrame({"application_id": ["1", "2"], "default": [1, 0]})
+    joined = join_outcomes(log, outcomes)
+    assert len(joined) == 2
+    assert sorted(joined["default_probability"]) == [0.2, 0.4]
+
+
+def test_no_matched_outcome_fails_instead_of_passing(tmp_path: Path) -> None:
+    log = tmp_path / "log.jsonl"
+    log.write_text('{"timestamp": "2026-01-05", "application_id": "1", "default_probability": 0.1}\n')
+    outcomes = tmp_path / "outcomes.csv"
+    outcomes.write_text("application_id,default\n99,1\n")
+    with pytest.raises(SystemExit) as stop:
+        main(["--log", str(log), "--outcomes", str(outcomes), "--out-dir", str(tmp_path)])
+    assert stop.value.code == 2

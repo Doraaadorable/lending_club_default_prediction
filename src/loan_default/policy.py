@@ -37,4 +37,7 @@ def policy_results(y: ArrayLike, approved: NDArray[np.bool_]) -> dict[str, float
 def cutoff_at(scores: ArrayLike, rate: float, seed: int = DEFAULT_TIE_SEED) -> float:
     """Highest score among the approved loans: approve a new loan if its score is at or below this."""
     scores = np.asarray(scores, dtype=float)
-    return float(scores[approve_safest(scores, rate, seed)].max())
+    approved = approve_safest(scores, rate, seed)
+    if not approved.any():
+        raise ValueError(f"approval rate {rate} approves no loans out of {len(scores)}, so there is no cutoff")
+    return float(scores[approved].max())

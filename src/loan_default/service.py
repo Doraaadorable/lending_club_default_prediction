@@ -108,10 +108,11 @@ def predict(application: LoanApplication) -> Prediction:
     if not math.isfinite(probability) or not 0 <= probability <= 1:
         raise HTTPException(status_code=500, detail=f"model returned an invalid score: {probability}")
     cutoff = float(metadata["approval_cutoff"])
+    # full precision: a rounded score could equal the rounded cutoff and contradict the decision
     prediction = Prediction(
-        default_probability=round(probability, 4),
+        default_probability=probability,
         decision="approve" if probability <= cutoff else "reject",
-        approval_cutoff=round(cutoff, 4),
+        approval_cutoff=cutoff,
     )
     log_prediction(application, prediction, metadata["model_sha256"])
     return prediction

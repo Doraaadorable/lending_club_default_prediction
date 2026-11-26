@@ -28,10 +28,14 @@ EmploymentLength = Literal[
 class LoanApplication(BaseModel):
     """Application-time information about one loan. Field names match the training data."""
 
-    revenue: float = Field(gt=0, description="Self-reported annual income, USD")
-    loan_amnt: float = Field(gt=0, description="Requested loan amount, USD")
-    fico_n: float = Field(ge=300, le=850, description="FICO score (midpoint of the reported range)")
-    dti_n: float | None = Field(default=None, ge=0, description="Debt-to-income ratio, percent; omit if unknown")
+    revenue: float = Field(gt=0, allow_inf_nan=False, description="Self-reported annual income, USD")
+    loan_amnt: float = Field(gt=0, allow_inf_nan=False, description="Requested loan amount, USD")
+    fico_n: float = Field(
+        ge=300, le=850, allow_inf_nan=False, description="FICO score (midpoint of the reported range)"
+    )
+    dti_n: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False, description="Debt-to-income ratio, percent; omit if unknown"
+    )
     emp_length: EmploymentLength = Field(default="NI", description="Employment length; NI means no information")
     purpose: str = Field(min_length=1, description="Loan purpose, e.g. debt_consolidation, credit_card, car")
     home_ownership_n: str = Field(min_length=1, description="RENT, MORTGAGE, OWN or OTHER")

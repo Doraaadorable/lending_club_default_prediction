@@ -44,14 +44,11 @@ def promote(
     `force` skips the comparison, for a deliberate rollback.
     """
     from mlflow import MlflowClient
-    from mlflow.exceptions import MlflowException
 
     client = MlflowClient(tracking_uri)
     if not force:
-        try:
-            current = client.get_model_version_by_alias(name, alias).version
-        except MlflowException:
-            current = None
+        # read the alias table instead of catching any error: a failed lookup must not skip the comparison
+        current = client.get_registered_model(name).aliases.get(alias)
         if current is not None and current != str(version):
             candidate_auc = version_test_auc(name, str(version), tracking_uri)
             current_auc = version_test_auc(name, current, tracking_uri)
@@ -66,22 +63,33 @@ def promote(
 def export(
     out_dir: Path, name: str = DEFAULT_MODEL_NAME, alias: str = DEFAULT_ALIAS, tracking_uri: str = DEFAULT_TRACKING_URI
 ) -> int:
-    """Write the model version behind `alias` and its training metadata to `out_dir`; return the version."""
+    """Write the model version behind `alias` and its training metadata to `out_dir`; return the version.
+
+    The alias is resolved once, and the model and metadata are both taken from that version, so a
+    promotion during the export cannot mix two versions. Each file is written under a temporary name
+    and moved into place. A running service caches the model: restart it to serve the new export.
+    """
+    import tempfile
+
     import mlflow
     import mlflow.sklearn
     from mlflow import MlflowClient
 
     mlflow.set_tracking_uri(tracking_uri)
     version = MlflowClient(tracking_uri).get_model_version_by_alias(name, alias)
-    model = mlflow.sklearn.load_model(f"models:/{name}@{alias}")
+    model = mlflow.sklearn.load_model(f"models:/{name}/{version.version}")
     out_dir.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, out_dir / "model.joblib")
-    downloaded = mlflow.artifacts.download_artifacts(
-        run_id=version.run_id, artifact_path="metadata.json", dst_path=str(out_dir), tracking_uri=tracking_uri
-    )
-    metadata = json.loads(Path(downloaded).read_text())
+    with tempfile.TemporaryDirectory() as staging:
+        downloaded = mlflow.artifacts.download_artifacts(
+            run_id=version.run_id, artifact_path="metadata.json", dst_path=staging, tracking_uri=tracking_uri
+        )
+        metadata = json.loads(Path(downloaded).read_text())
     metadata["registered_model"] = {"name": name, "version": int(version.version), "alias": alias}
-    (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    model_tmp, metadata_tmp = out_dir / ".model.joblib.tmp", out_dir / ".metadata.json.tmp"
+    joblib.dump(model, model_tmp)
+    metadata_tmp.write_text(json.dumps(metadata, indent=2) + "\n")
+    model_tmp.replace(out_dir / "model.joblib")
+    metadata_tmp.replace(out_dir / "metadata.json")
     return int(version.version)
 
 

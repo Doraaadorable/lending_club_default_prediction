@@ -35,6 +35,10 @@ CATEGORICAL_FEATURES = ONE_HOT + TARGET_ENCODED
 PSI_MODERATE = 0.10
 PSI_LARGE = 0.25
 PSI_FLOOR = 1e-6  # keeps empty bins from producing log(0)
+# PSI ignores missing values, so a change in the share missing is read separately (absolute change in share).
+MISSING_MODERATE = 0.05
+MISSING_LARGE = 0.20
+LEVELS = ("stable", "moderate", "large", "invalid")
 
 
 def psi_from_shares(reference: NDArray[np.float64], current: NDArray[np.float64]) -> float:
@@ -62,18 +66,34 @@ def categorical_psi(reference: pd.Series, current: pd.Series) -> float:
 
 def drifted_features(features: pd.DataFrame, level: str) -> list[str]:
     """Features whose shift reading is `level` or worse ("moderate" includes "large")."""
-    flagged = {"moderate": {"moderate", "large"}, "large": {"large"}}[level]
+    flagged = {"moderate": {"moderate", "large", "invalid"}, "large": {"large", "invalid"}}[level]
     names: list[str] = features.loc[features["reading"].isin(flagged), "feature"].tolist()
     return names
 
 
 def psi_label(psi: float) -> str:
-    """Translate a PSI value into the usual three-level reading."""
+    """Translate a PSI value into the usual three-level reading; a PSI that is not a number is "invalid"."""
+    if not np.isfinite(psi):
+        return "invalid"
     if psi >= PSI_LARGE:
         return "large"
     if psi >= PSI_MODERATE:
         return "moderate"
     return "stable"
+
+
+def missing_label(change: float) -> str:
+    """Reading for an absolute change in the share of missing values."""
+    if abs(change) >= MISSING_LARGE:
+        return "large"
+    if abs(change) >= MISSING_MODERATE:
+        return "moderate"
+    return "stable"
+
+
+def worse(first: str, second: str) -> str:
+    """The more severe of two readings."""
+    return max(first, second, key=LEVELS.index)
 
 
 def feature_drift(reference: pd.DataFrame, current: pd.DataFrame) -> pd.DataFrame:
@@ -90,9 +110,14 @@ def feature_drift(reference: pd.DataFrame, current: pd.DataFrame) -> pd.DataFram
         psi = categorical_psi(ref[name], cur[name])
         rows.append({"feature": name, "test": "chi-squared", "p_value": p_value, "psi": psi})
     report = pd.DataFrame(rows)
-    report["reading"] = report["psi"].map(psi_label)
     report["missing_reference"] = [float(ref[f].isna().mean()) for f in report["feature"]]
     report["missing_current"] = [float(cur[f].isna().mean()) for f in report["feature"]]
+    report["reading"] = [
+        worse(psi_label(psi), missing_label(cur_missing - ref_missing))
+        for psi, ref_missing, cur_missing in zip(
+            report["psi"], report["missing_reference"], report["missing_current"], strict=True
+        )
+    ]
     return report.sort_values("psi", ascending=False, ignore_index=True)
 
 
@@ -182,10 +207,13 @@ def _feature_table(features: pd.DataFrame, heading: str = "## Did the inputs cha
     lines += [
         "",
         f"PSI below {PSI_MODERATE:.2f} is read as stable, {PSI_MODERATE:.2f}-{PSI_LARGE:.2f} as a moderate shift, "
-        f"above {PSI_LARGE:.2f} as a large shift.",
+        f"above {PSI_LARGE:.2f} as a large shift. PSI ignores missing values, so a change of "
+        f"{MISSING_MODERATE:.0%} or more in the share missing is also read as moderate, {MISSING_LARGE:.0%} or more "
+        "as large; a PSI that cannot be computed (for example, every current value missing) is read as invalid "
+        "and treated as a failure.",
         "",
         (
-            f"Features with a moderate or large shift: {', '.join(f'`{f}`' for f in drifted)}."
+            f"Features with a moderate, large or invalid reading: {', '.join(f'`{f}`' for f in drifted)}."
             if drifted
             else "No feature reaches the moderate threshold."
         ),

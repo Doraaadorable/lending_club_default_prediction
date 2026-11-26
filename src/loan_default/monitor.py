@@ -3,9 +3,11 @@
     python -m loan_default.monitor --log logs/predictions.jsonl --outcomes outcomes.csv --max-gap 0.02
 
 `outcomes.csv` has one row per resolved loan: `application_id` and `default` (0 or 1).
-Predictions are grouped by the month they were made. The command exits with status 1
-if any month's actual default rate differs from its mean predicted probability by more
-than `--max-gap`.
+An application id may appear only once in the outcomes; if an application was scored more
+than once, its latest prediction is the one compared. Predictions are grouped by the month
+they were made. Exit status: 1 if any month's actual default rate differs from its mean
+predicted probability by more than `--max-gap`; 2 if no prediction could be matched to an
+outcome, so there was nothing to check.
 """
 
 import argparse
@@ -25,9 +27,17 @@ def prediction_months(timestamps: pd.Series) -> pd.Series:
 
 def join_outcomes(log: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
     """Predictions that have a known outcome, with their month, score and result."""
-    left = log.dropna(subset=["application_id"]).assign(application_id=lambda d: d["application_id"].astype(str))
     right = outcomes.assign(application_id=outcomes["application_id"].astype(str))[["application_id", "default"]]
-    joined = left.merge(right, on="application_id", how="inner")
+    repeated = right["application_id"][right["application_id"].duplicated()].unique()
+    if len(repeated):
+        raise ValueError(f"outcomes list {len(repeated)} application id(s) more than once, e.g. {repeated[0]!r}")
+    left = log.dropna(subset=["application_id"]).assign(application_id=lambda d: d["application_id"].astype(str))
+    left = (
+        left.assign(_moment=pd.to_datetime(left["timestamp"], utc=True, format="mixed"))
+        .sort_values("_moment", kind="stable")
+        .drop_duplicates("application_id", keep="last")  # a re-scored application counts once, at its latest score
+    )
+    joined = left.merge(right, on="application_id", how="inner", validate="one_to_one")
     return pd.DataFrame(
         {
             "month": prediction_months(joined["timestamp"]),
@@ -82,7 +92,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     log = pd.read_json(args.log, lines=True, dtype={"application_id": str, "addr_state": str})
-    table = calibration_by_month(join_outcomes(log, pd.read_csv(args.outcomes, dtype={"application_id": str})))
+    joined = join_outcomes(log, pd.read_csv(args.outcomes, dtype={"application_id": str}))
+    logged = int(log["application_id"].dropna().nunique()) if "application_id" in log else 0
+    print(f"Matched {len(joined):,} of {logged:,} logged applications to an outcome.", file=sys.stderr)
+    if joined.empty:
+        print("No prediction could be matched to an outcome: nothing was checked.", file=sys.stderr)
+        raise SystemExit(2)
+    table = calibration_by_month(joined)
     report = render(table, args.max_gap, args.log)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "outcome_monitor.md").write_text(report)
