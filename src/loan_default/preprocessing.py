@@ -24,7 +24,8 @@ import numpy as np
 import pandas as pd
 import sklearn
 from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401  (makes IterativeImputer importable)
+from sklearn.impute import IterativeImputer, KNNImputer, SimpleImputer
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler, TargetEncoder
@@ -107,7 +108,37 @@ def _make_target_encoder() -> TargetEncoder:
     return TargetEncoder(target_type="binary", smooth=STATE_SMOOTHING, random_state=42)
 
 
-def build_preprocessor() -> Pipeline:
+IMPUTERS = ("median", "mean", "iterative", "knn")
+
+
+def make_imputer(
+    strategy: str, add_indicator: bool = True, seed: int = 42
+) -> SimpleImputer | IterativeImputer | KNNImputer:
+    """Imputer for the numeric block.
+
+    median, mean : one constant per column (the project default is median)
+    iterative    : MICE-style chained regressions; each column is predicted from all the others
+    knn          : average of the 10 most similar loans on the other numeric columns
+    """
+    if strategy in {"median", "mean"}:
+        return SimpleImputer(strategy=strategy, add_indicator=add_indicator)
+    if strategy == "iterative":
+        return IterativeImputer(max_iter=10, random_state=seed, add_indicator=add_indicator)
+    if strategy == "knn":
+        return KNNImputer(n_neighbors=10, add_indicator=add_indicator)
+    raise ValueError(f"imputer must be one of {IMPUTERS}, got {strategy!r}")
+
+
+def _log_skewed_columns(X: pd.DataFrame) -> pd.DataFrame:
+    """log(1 + x) on the long-tailed columns, other columns unchanged."""
+    X = X.copy()
+    X[SKEWED] = np.log1p(X[SKEWED])
+    return X
+
+
+def build_preprocessor(
+    numeric_imputer: str = "median", add_indicator: bool = True, include_state: bool = True
+) -> Pipeline:
     """
     The full preprocessing pipeline (unfitted).
 
@@ -117,34 +148,44 @@ def build_preprocessor() -> Pipeline:
         one-hot        : purpose, home ownership; levels with < 500 rows grouped as "infrequent"
         target-encoded : state -> smoothed default rate, learned with internal cross-fitting
                          encoded = (n * state_rate + 100 * overall_rate) / (n + 100)
+
+    The defaults are the production pipeline. The arguments exist for the experiments in
+    `loan_default.imputation` and `loan_default.fairness`:
+
+    numeric_imputer : "median" (default), "mean", "iterative" or "knn". The model-based imputers
+                      see the numeric and log-scaled skewed columns together, so income and loan
+                      size can inform a missing employment length or DTI.
+    add_indicator   : keep a 0/1 "was missing" column for each column that had gaps in training
+    include_state   : False drops the state encoding (fairness comparison)
     """
-    numeric = make_pipeline(
-        SimpleImputer(strategy="median", add_indicator=True),
-        StandardScaler(),
-    )
-    skewed = make_pipeline(
-        FunctionTransformer(np.log1p, feature_names_out="one-to-one"),
-        StandardScaler(),
-    )
     one_hot = OneHotEncoder(
         handle_unknown="infrequent_if_exist",
         min_frequency=500,
         sparse_output=False,
     )
-    target_encoded = _make_target_encoder()
-
-    columns = ColumnTransformer(
-        [
-            ("num", numeric, NUMERIC),
-            ("log", skewed, SKEWED),
-            ("cat", one_hot, ONE_HOT),
-            ("state", target_encoded, TARGET_ENCODED),
-        ]
-    )
+    blocks: list[tuple[str, object, list[str]]]
+    if numeric_imputer in {"median", "mean"}:
+        numeric = make_pipeline(make_imputer(numeric_imputer, add_indicator), StandardScaler())
+        skewed = make_pipeline(
+            FunctionTransformer(np.log1p, feature_names_out="one-to-one"),
+            StandardScaler(),
+        )
+        blocks = [("num", numeric, NUMERIC), ("log", skewed, SKEWED)]
+    else:
+        # scale first so that distances (KNN) and regressions (iterative) treat columns alike
+        joint = make_pipeline(
+            FunctionTransformer(_log_skewed_columns, feature_names_out="one-to-one"),
+            StandardScaler(),
+            make_imputer(numeric_imputer, add_indicator),
+        )
+        blocks = [("num", joint, NUMERIC + SKEWED)]
+    blocks.append(("cat", one_hot, ONE_HOT))
+    if include_state:
+        blocks.append(("state", _make_target_encoder(), TARGET_ENCODED))
 
     return Pipeline(
         [
             ("clean", FunctionTransformer(clean)),
-            ("columns", columns),
+            ("columns", ColumnTransformer(blocks)),
         ]
     )

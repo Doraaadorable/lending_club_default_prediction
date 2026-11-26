@@ -21,6 +21,7 @@ dev = ["pytest", "ruff", "mypy", "httpx"]
 tracking = ["mlflow"]
 serve = ["fastapi", "uvicorn"]
 notebooks = ["matplotlib", "jupyter", "threadpoolctl"]
+research = ["optuna", "shap", "matplotlib"]  # the analysis modules: hpo, explain and the figures
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -57,5 +58,5 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib.*", "pandas.*", "mlflow.*", "scipy.*"]  # no bundled type information in this environment
+module = ["sklearn.*", "joblib.*", "pandas.*", "mlflow.*", "scipy.*", "shap.*"]  # no bundled type information in this environment
 ignore_missing_imports = true

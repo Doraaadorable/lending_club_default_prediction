@@ -1,0 +1,165 @@
+"""Compare imputation methods: how well they recover hidden values, and whether it changes the model.
+
+    python -m loan_default.imputation        # writes reports/imputation_report.md and .csv
+
+Two questions, kept apart because they can disagree:
+
+1. Reconstruction. Hide a random 10% of known FICO, DTI and employment-length values, impute
+   them with each method, and compare with the truth. This rewards a method for guessing well.
+2. Usefulness. Fit the tuned gradient boosting pipeline with each imputer and compare CV and
+   2016 ranking. This rewards whatever helps predict default, including the fact that a value
+   was missing at all. Employment length is missing far more often among loans that default
+   (it is not missing at random), so a missing-value flag can matter more than the fill value.
+"""
+
+import argparse
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+from loan_default.experiments import Splits, compare, comparison_table, load_splits, write_report
+from loan_default.preprocessing import IMPUTERS, NUMERIC, SKEWED, build_preprocessor, clean, make_imputer
+from loan_default.train import TUNED_PARAMS, build_model
+
+MASK_SHARE = 0.10
+RECONSTRUCTION_SAMPLE = 30_000
+SEED = 42
+
+
+def missingness_by_outcome(X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
+    """Share missing after cleaning, and the default rate with and without a value, per numeric column."""
+    cleaned = clean(X)
+    rows = []
+    for column in NUMERIC:
+        missing = cleaned[column].isna().to_numpy()
+        rows.append(
+            {
+                "column": column,
+                "share_missing": float(missing.mean()),
+                "default_rate_missing": float(y[missing].mean()) if missing.any() else float("nan"),
+                "default_rate_present": float(y[~missing].mean()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def mask_at_random(
+    frame: pd.DataFrame, columns: list[str], share: float, seed: int = SEED
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Hide `share` of the known values in each column; return the masked frame and a mask of what was hidden."""
+    rng = np.random.default_rng(seed)
+    masked = frame.copy()
+    hidden = pd.DataFrame(False, index=frame.index, columns=columns)
+    for column in columns:
+        known = frame[column].notna().to_numpy()
+        hidden[column] = known & (rng.random(len(frame)) < share)
+        masked.loc[hidden[column].to_numpy(), column] = np.nan
+    return masked, hidden
+
+
+def reconstruction_error(X: pd.DataFrame, strategies: tuple[str, ...] = IMPUTERS, seed: int = SEED) -> pd.DataFrame:
+    """RMSE and MAE of each imputer on values hidden at random, in each column's original units."""
+    cleaned = clean(X)[NUMERIC + SKEWED].copy()
+    cleaned[SKEWED] = np.log1p(cleaned[SKEWED])
+    masked, hidden = mask_at_random(cleaned, NUMERIC, MASK_SHARE, seed)
+    scaler = StandardScaler().fit(masked)
+    rows = []
+    for strategy in strategies:
+        imputer = make_imputer(strategy, add_indicator=False, seed=seed)
+        filled = scaler.inverse_transform(imputer.fit_transform(scaler.transform(masked)))
+        filled_frame = pd.DataFrame(filled, columns=cleaned.columns, index=cleaned.index)
+        for column in NUMERIC:
+            rows_hidden = hidden[column].to_numpy()
+            error = filled_frame.loc[rows_hidden, column] - cleaned.loc[rows_hidden, column]
+            rows.append(
+                {
+                    "imputer": strategy,
+                    "column": column,
+                    "n_hidden": int(rows_hidden.sum()),
+                    "rmse": float(np.sqrt((error**2).mean())),
+                    "mae": float(error.abs().mean()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def candidates(params: dict[str, float | int] = TUNED_PARAMS, seed: int = SEED) -> dict[str, Pipeline]:
+    """The tuned model with each imputer; the first entry is the production pipeline."""
+    tuned = build_model(params, seed)
+    models: dict[str, Pipeline] = {"median + missing flag (production)": tuned}
+    for strategy, label in [("mean", "mean"), ("iterative", "iterative (MICE)"), ("knn", "KNN, k = 10")]:
+        model = build_model(params, seed)
+        model.set_params(preprocess=build_preprocessor(numeric_imputer=strategy))
+        models[f"{label} + missing flag"] = model
+    for strategy, label in [("median", "median"), ("iterative", "iterative (MICE)")]:
+        model = build_model(params, seed)
+        model.set_params(preprocess=build_preprocessor(numeric_imputer=strategy, add_indicator=False))
+        models[f"{label}, no flag"] = model
+    return models
+
+
+def render_report(missingness: pd.DataFrame, errors: pd.DataFrame, results: pd.DataFrame) -> str:
+    """Write the findings as Markdown."""
+    lines = [
+        "# Imputation",
+        "",
+        "Generated by `python -m loan_default.imputation`.",
+        "",
+        "## Where values are missing (training sample, after cleaning)",
+        "",
+        "| Column | Missing | Default rate when missing | Default rate when present |",
+        "|---|---:|---:|---:|",
+    ]
+    for row in missingness.itertuples():
+        when_missing = "n/a" if np.isnan(row.default_rate_missing) else f"{row.default_rate_missing * 100:.2f}%"
+        lines.append(
+            f"| {row.column} | {row.share_missing * 100:.2f}% | {when_missing} | "
+            f"{row.default_rate_present * 100:.2f}% |"
+        )
+    lines += [
+        "",
+        f"## 1. Recovering values hidden at random ({MASK_SHARE:.0%} of known values, "
+        f"{RECONSTRUCTION_SAMPLE:,}-loan sample)",
+        "",
+        "| Column | " + " | ".join(f"{s} RMSE" for s in errors["imputer"].unique()) + " |",
+        "|---|" + "---:|" * errors["imputer"].nunique(),
+    ]
+    for column, group in errors.groupby("column", sort=False):
+        lines.append(f"| {column} | " + " | ".join(f"{v:.3f}" for v in group["rmse"]) + " |")
+    lines += [
+        "",
+        "Units: FICO points, DTI percentage points, years of employment.",
+        "",
+        "## 2. Effect on the model",
+        "",
+        *comparison_table(results, baseline=str(results["candidate"].iloc[0])),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def run(splits: Splits, out_dir: Path) -> str:
+    """Run both comparisons and write the report."""
+    missingness = missingness_by_outcome(splits.X_train, splits.y_train)
+    sample = splits.X_train.sample(RECONSTRUCTION_SAMPLE, random_state=SEED)
+    errors = reconstruction_error(sample)
+    results = compare(candidates(), splits)
+    report = render_report(missingness, errors, results)
+    write_report(out_dir, "imputation_report", report, results)
+    errors.to_csv(out_dir / "imputation_reconstruction.csv", index=False)
+    return report
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Run the comparison from the command line."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--out-dir", type=Path, default=Path("reports"))
+    args = parser.parse_args(argv)
+    print(run(load_splits(), args.out_dir))
+
+
+if __name__ == "__main__":
+    main()
