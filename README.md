@@ -828,7 +828,7 @@ The description-availability flag was removed because descriptions became almost
 | [src/loan_default/fairness.py](src/loan_default/fairness.py) | Group fairness audit and mitigations (section 13) |
 | [docs/model_card.md](docs/model_card.md) | Model card: intended use, metrics, ethical considerations |
 | [docs/product_and_data_management.md](docs/product_and_data_management.md) | Users, success metrics, rollout plan, risks, data lineage and governance |
-| [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/), [pull_request_template.md](.github/pull_request_template.md) | Issue and pull request templates for the team board |
+| [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/), [pull_request_template.md](.github/pull_request_template.md) | Issue and pull request templates for planning experiments and reviewing changes |
 | [reports/](reports/) | Generated drift, chronological validation, recalibration, search and section 12–13 reports; figures in `reports/figures/` |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Continuous integration |
 | [.github/workflows/drift.yml](.github/workflows/drift.yml) | Weekly drift check on the prediction log |
