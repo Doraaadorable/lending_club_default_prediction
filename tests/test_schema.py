@@ -31,7 +31,14 @@ def test_missing_dti_and_the_999_placeholder_are_valid() -> None:
 
 @pytest.mark.parametrize(
     "change",
-    [{"fico_n": 900.0}, {"revenue": 0.0}, {"emp_length": "12 years"}, {"addr_state": "New York"}],
+    [
+        {"fico_n": 900.0},
+        {"revenue": 0.0},
+        {"revenue": float("inf")},
+        {"loan_amnt": float("nan")},
+        {"emp_length": "12 years"},
+        {"addr_state": "New York"},
+    ],
 )
 def test_rule_breaks_are_reported_with_the_row(change: dict[str, object]) -> None:
     field = next(iter(change))

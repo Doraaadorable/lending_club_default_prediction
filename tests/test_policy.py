@@ -42,3 +42,8 @@ def test_approving_everyone_leaves_no_rejected_rate() -> None:
 def test_cutoff_is_the_highest_approved_score() -> None:
     scores = np.array([0.9, 0.1, 0.5, 0.3, 0.7])
     assert cutoff_at(scores, 0.6) == 0.5
+
+
+def test_a_cutoff_that_approves_nothing_is_an_error() -> None:
+    with pytest.raises(ValueError, match="approves no loans"):
+        cutoff_at(np.array([0.1, 0.2, 0.3]), 0.0)

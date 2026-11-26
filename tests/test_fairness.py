@@ -46,3 +46,11 @@ def test_equal_opportunity_cutoffs_equalize_approval_of_repaid_borrowers() -> No
     approved = apply_cutoffs(groups, scores, cutoffs)
     table = group_metrics(groups, y, scores, approved)
     assert disparities(table)["equal_opportunity_difference"] < 0.01
+
+
+def test_a_group_without_a_cutoff_uses_the_fallback_or_fails() -> None:
+    groups = pd.Series(["a", "new"])
+    scores = np.array([0.2, 0.2])
+    with pytest.raises(ValueError, match="no cutoff"):
+        apply_cutoffs(groups, scores, {"a": 0.3})
+    assert apply_cutoffs(groups, scores, {"a": 0.3}, fallback=0.1).tolist() == [True, False]

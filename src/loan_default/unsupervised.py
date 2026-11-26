@@ -21,8 +21,9 @@ from numpy.typing import ArrayLike, NDArray
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import silhouette_score
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from loan_default.experiments import Splits, compare, comparison_table, load_splits, write_report
@@ -56,15 +57,18 @@ class ClusterDistances(TransformerMixin, BaseEstimator):  # type: ignore[misc]
         return out
 
 
-def profile_matrix(X: pd.DataFrame, scaler: StandardScaler | None = None) -> tuple[NDArray[np.float64], StandardScaler]:
-    """Financial profile used for clustering: log of skewed columns, median-filled, standardized."""
+def profile_matrix(X: pd.DataFrame, fitted: Pipeline | None = None) -> tuple[NDArray[np.float64], Pipeline]:
+    """Financial profile used for clustering: log of skewed columns, median-filled, standardized.
+
+    Pass the `fitted` pipeline returned for the training data to transform another period with the
+    training medians and scales, so a loan gets the same profile whatever batch it arrives in.
+    """
     cleaned = clean(X)[PROFILE].copy()
     cleaned[SKEWED] = np.log1p(cleaned[SKEWED])
-    cleaned = cleaned.fillna(cleaned.median())
-    if scaler is None:
-        scaler = StandardScaler().fit(cleaned)
-    values: NDArray[np.float64] = scaler.transform(cleaned)
-    return values, scaler
+    if fitted is None:
+        fitted = make_pipeline(SimpleImputer(strategy="median"), StandardScaler()).fit(cleaned)
+    values: NDArray[np.float64] = np.asarray(fitted.transform(cleaned), dtype=float)
+    return values, fitted
 
 
 def feature_matrix(X_train: pd.DataFrame, y_train: pd.Series) -> tuple[NDArray[np.float64], list[str]]:
@@ -122,7 +126,7 @@ def pick_k(k_table: pd.DataFrame, tolerance: float = SILHOUETTE_TOLERANCE) -> in
     return int(close["k"].max())
 
 
-def cluster_profiles(splits: Splits, k: int, seed: int = SEED) -> tuple[pd.DataFrame, KMeans, StandardScaler]:
+def cluster_profiles(splits: Splits, k: int, seed: int = SEED) -> tuple[pd.DataFrame, KMeans, Pipeline]:
     """Fit k-means on training profiles; describe each cluster and its default rate in both periods."""
     train_profile, scaler = profile_matrix(splits.X_train)
     test_profile, _ = profile_matrix(splits.X_test, scaler)
@@ -203,7 +207,7 @@ def candidates(n_components: int, k: int) -> dict[str, Pipeline]:
     return {
         "production features": production,
         f"first {n_components} principal components only": on_pca,
-        f"production + distances to {k} cluster centres": with_clusters,
+        f"production + distances to {k} k-means centres fitted on all preprocessed features": with_clusters,
     }
 
 

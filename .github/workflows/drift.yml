@@ -44,7 +44,8 @@ jobs:
         if: steps.fetch.outputs.found == 'true'
         run: python -m loan_default.drift --current predictions.jsonl --out-dir drift --fail-on moderate
       - name: Compare predictions with known outcomes
-        if: steps.fetch.outputs.found == 'true' && vars.OUTCOMES_URL != ''
+        # runs even when the input check failed, so an input alert never hides an outcome alert
+        if: always() && steps.fetch.outputs.found == 'true' && vars.OUTCOMES_URL != ''
         env:
           OUTCOMES_URL: ${{ vars.OUTCOMES_URL }}
         run: |

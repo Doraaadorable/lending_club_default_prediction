@@ -10,8 +10,9 @@ fully labeled 2016 sample. Each setting is repeated over three random labeled su
 Methods, all with the same gradient boosting learner:
 
 labeled only            ignore the unlabeled loans
-self-training           scikit-learn's SelfTrainingClassifier: repeatedly add the unlabeled loans
-                        the model is most confident about, with their predicted class
+self-training           classic threshold self-training (as in scikit-learn's SelfTrainingClassifier):
+                        3 rounds, each adding the unlabeled loans predicted with probability 0.9 or
+                        more, with their predicted class
 balanced self-training  the same, but each of 3 rounds adds 10% of the loans, as confident
                         defaults and confident repayments in the labeled base rate, so the
                         pseudo-labels do not drift to "repaid"
@@ -20,6 +21,15 @@ cluster soft labels     cluster all loans (k-means); give each unlabeled loan it
 label spreading         the same soft-label idea over a k-nearest-neighbour graph
 cluster features        fit k-means on all loans and add the distances to the centres as features
                         (unlabeled loans only shape the representation)
+
+Every method stops boosting early on the same held-out 15% of the labeled loans, which never get
+pseudo-labels and are never duplicated, so early stopping always judges against real outcomes.
+The state target encoding is cross-fitted on the labeled training loans, so no loan's encoding
+uses its own outcome.
+
+What this measures: whether unlabeled loans from the same population help when few outcomes are
+known at random. Rejected applicants are not a random subset, so this does not show what reject
+inference would achieve.
 """
 
 import argparse
@@ -31,7 +41,7 @@ import pandas as pd
 from numpy.typing import NDArray
 from sklearn.cluster import KMeans
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.semi_supervised import LabelSpreading, SelfTrainingClassifier
+from sklearn.semi_supervised import LabelSpreading
 
 from loan_default.experiments import Splits, load_splits, score_metrics, write_report
 from loan_default.preprocessing import build_preprocessor
@@ -39,6 +49,7 @@ from loan_default.train import TUNED_PARAMS, build_model
 
 Array = NDArray[np.float64]
 LABEL_SHARES = (0.01, 0.05, 0.20)
+VALIDATION_SHARE = 0.15
 REPEATS = 3
 UNLABELED = -1
 SEED = 42
@@ -61,7 +72,6 @@ def learner(seed: int = SEED) -> HistGradientBoostingClassifier:
         min_samples_leaf=40,
         l2_regularization=1.0,
         early_stopping=True,
-        validation_fraction=0.15,
         n_iter_no_change=10,
         random_state=seed,
     )
@@ -81,11 +91,13 @@ def hide_labels(y: pd.Series, share: float, seed: int) -> NDArray[np.int64]:
 
 @dataclass
 class Prepared:
-    """Preprocessed training and test matrices, with the partially hidden training labels."""
+    """Preprocessed matrices: the training pool with partly hidden labels, the early-stopping set, and the test set."""
 
     train: Array
     test: Array
     labels: NDArray[np.int64]
+    val: Array
+    val_labels: NDArray[np.int64]
 
     @property
     def labeled(self) -> NDArray[np.bool_]:
@@ -94,15 +106,37 @@ class Prepared:
         return out
 
 
-def prepare(splits: Splits, labels: NDArray[np.int64]) -> Prepared:
-    """Fit the production preprocessing on the labeled loans only (state encoding needs outcomes)."""
-    known = labels != UNLABELED
-    preprocessor = build_preprocessor().fit(splits.X_train[known], labels[known])
+def prepare(splits: Splits, labels: NDArray[np.int64], seed: int = SEED) -> Prepared:
+    """Set aside a stratified early-stopping set from the labeled loans, then preprocess.
+
+    The production preprocessing is fitted on the remaining labeled loans with fit_transform, so their
+    state encoding is cross-fitted; the early-stopping set, the unlabeled pool and 2016 are transformed.
+    """
+    rng = np.random.default_rng(seed)
+    held_out = np.zeros(len(labels), dtype=bool)
+    for cls in (0, 1):
+        members = np.flatnonzero(labels == cls)
+        held_out[rng.choice(members, max(1, int(round(VALIDATION_SHARE * len(members)))), replace=False)] = True
+    fit_rows = (labels != UNLABELED) & ~held_out
+    preprocessor = build_preprocessor()
+    fitted = np.asarray(preprocessor.fit_transform(splits.X_train[fit_rows], labels[fit_rows]), dtype=float)
+    train = np.asarray(preprocessor.transform(splits.X_train), dtype=float)
+    train[fit_rows] = fitted
+    pool = ~held_out
     return Prepared(
-        np.asarray(preprocessor.transform(splits.X_train), dtype=float),
+        train[pool],
         np.asarray(preprocessor.transform(splits.X_test), dtype=float),
-        labels,
+        labels[pool],
+        train[held_out],
+        labels[held_out],
     )
+
+
+def fit(
+    data: Prepared, X: Array, y: NDArray[np.int64] | Array, seed: int, weight: Array | None = None
+) -> HistGradientBoostingClassifier:
+    """Fit the shared learner, stopping early on the held-out labeled loans."""
+    return learner(seed).fit(X, y, sample_weight=weight, X_val=data.val, y_val=data.val_labels)
 
 
 def fit_soft(data: Prepared, soft: Array, seed: int) -> HistGradientBoostingClassifier:
@@ -111,7 +145,7 @@ def fit_soft(data: Prepared, soft: Array, seed: int) -> HistGradientBoostingClas
     X = np.vstack([data.train[known], data.train[~known], data.train[~known]])
     y = np.concatenate([data.labels[known], np.ones((~known).sum()), np.zeros((~known).sum())])
     weights = np.concatenate([np.ones(known.sum()), soft[~known], 1 - soft[~known]])
-    return learner(seed).fit(X, y, sample_weight=weights)
+    return fit(data, X, y, seed, weights)
 
 
 def n_clusters_for(n_labeled: int) -> int:
@@ -148,7 +182,7 @@ def balanced_self_training(data: Prepared, seed: int, rounds: int = 3, per_round
     base = float(labels[labels != UNLABELED].mean())
     for _ in range(rounds):
         known = labels != UNLABELED
-        model = learner(seed).fit(data.train[known], labels[known])
+        model = fit(data, data.train[known], labels[known], seed)
         pool = np.flatnonzero(~known)
         if len(pool) == 0:
             break
@@ -159,7 +193,25 @@ def balanced_self_training(data: Prepared, seed: int, rounds: int = 3, per_round
         labels[pool[order[: n_add - n_default]]] = 0  # most confident repayments
         labels[pool[order[::-1][:n_default]]] = 1  # most confident defaults
     known = labels != UNLABELED
-    out: Array = learner(seed).fit(data.train[known], labels[known]).predict_proba(data.test)[:, 1]
+    out: Array = fit(data, data.train[known], labels[known], seed).predict_proba(data.test)[:, 1]
+    return out
+
+
+def threshold_self_training(data: Prepared, seed: int, rounds: int = 3, threshold: float = 0.9) -> Array:
+    """Self-training that adds every unlabeled loan predicted with probability >= threshold; returns test scores."""
+    labels = data.labels.copy()
+    for _ in range(rounds):
+        known = labels != UNLABELED
+        pool = np.flatnonzero(~known)
+        if len(pool) == 0:
+            break
+        proba = fit(data, data.train[known], labels[known], seed).predict_proba(data.train[pool])[:, 1]
+        confident = (proba >= threshold) | (proba <= 1 - threshold)
+        if not confident.any():
+            break
+        labels[pool[confident]] = (proba[confident] >= 0.5).astype(np.int64)
+    known = labels != UNLABELED
+    out: Array = fit(data, data.train[known], labels[known], seed).predict_proba(data.test)[:, 1]
     return out
 
 
@@ -167,9 +219,9 @@ def test_scores(method: str, data: Prepared, seed: int) -> Array:
     """2016 scores from one method trained on the partially labeled training set."""
     known = data.labeled
     if method == "labeled only":
-        model = learner(seed).fit(data.train[known], data.labels[known])
+        model = fit(data, data.train[known], data.labels[known], seed)
     elif method == "self-training":
-        model = SelfTrainingClassifier(learner(seed), threshold=0.9, max_iter=3).fit(data.train, data.labels)
+        return threshold_self_training(data, seed)
     elif method == "balanced self-training":
         return balanced_self_training(data, seed)
     elif method == "cluster soft labels":
@@ -180,7 +232,10 @@ def test_scores(method: str, data: Prepared, seed: int) -> Array:
         kmeans = KMeans(n_clusters_for(int(known.sum())), n_init=3, random_state=seed).fit(data.train)
         augmented_train = np.hstack([data.train, kmeans.transform(data.train)])
         augmented_test = np.hstack([data.test, kmeans.transform(data.test)])
-        scores: Array = learner(seed).fit(augmented_train[known], data.labels[known]).predict_proba(augmented_test)
+        augmented = Prepared(
+            data.train, data.test, data.labels, np.hstack([data.val, kmeans.transform(data.val)]), data.val_labels
+        )
+        scores: Array = fit(augmented, augmented_train[known], data.labels[known], seed).predict_proba(augmented_test)
         return scores[:, 1]
     else:
         raise ValueError(f"unknown method {method!r}")
@@ -200,7 +255,7 @@ def experiment(
     for share in shares:
         for repeat in range(repeats):
             labels = hide_labels(splits.y_train, share, seed=SEED + repeat)
-            data = prepare(splits, labels)
+            data = prepare(splits, labels, seed=SEED + repeat)
             for method in methods:
                 metrics = score_metrics(splits.y_test, test_scores(method, data, SEED + repeat))
                 if verbose:
@@ -209,6 +264,17 @@ def experiment(
                     )
                 rows.append({"label_share": share, "repeat": repeat, "method": method} | metrics)
     return pd.DataFrame(rows)
+
+
+def paired_differences(results: pd.DataFrame, baseline: str = "labeled only") -> pd.DataFrame:
+    """Each method's test ROC-AUC minus the baseline's on the same labeled subset: mean, min and max over repeats."""
+    base = results[results["method"] == baseline].set_index(["label_share", "repeat"])["roc_auc"]
+    others = results[results["method"] != baseline].copy()
+    others["difference"] = (
+        others["roc_auc"].to_numpy()
+        - base.loc[list(zip(others["label_share"], others["repeat"], strict=True))].to_numpy()
+    )
+    return others.groupby(["label_share", "method"], sort=False)["difference"].agg(["mean", "min", "max"])
 
 
 def render_report(results: pd.DataFrame, full: dict[str, float]) -> str:
@@ -245,6 +311,23 @@ def render_report(results: pd.DataFrame, full: dict[str, float]) -> str:
     ]
     for method in methods:
         cells = [f"{summary.loc[(s, method), 'default_rate'] * 100:.2f}%" for s in shares]
+        lines.append(f"| {method} | " + " | ".join(cells) + " |")
+    paired = paired_differences(results)
+    lines += [
+        "",
+        "## Change against labeled only, paired by labeled subset",
+        "",
+        "Each method minus labeled only on the same labeled subset, test ROC-AUC; mean (smallest to largest) "
+        f"over the {results['repeat'].nunique()} subsets.",
+        "",
+        "| Method | " + " | ".join(f"{s:.0%} labeled" for s in shares) + " |",
+        "|---|" + "---:|" * len(shares),
+    ]
+    for method in methods[1:]:
+        cells = []
+        for s in shares:
+            d = paired.loc[(s, method)]
+            cells.append(f"{d['mean']:+.4f} ({d['min']:+.4f} to {d['max']:+.4f})")
         lines.append(f"| {method} | " + " | ".join(cells) + " |")
     lines += [
         "",

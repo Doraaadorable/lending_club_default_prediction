@@ -121,3 +121,26 @@ def test_command_line_exits_with_an_error_when_the_log_drifts(tmp_path: Path) ->
         main(["--current", str(log), "--out-dir", str(tmp_path / "out"), "--fail-on", "moderate"])
     assert exit_info.value.code == 1
     assert (tmp_path / "out" / "log_drift_report.md").is_file()
+
+
+def test_a_field_that_goes_entirely_missing_is_flagged_not_stable() -> None:
+    from loan_default.drift import drifted_features, feature_drift
+    from loan_default.preprocessing import load_split
+
+    X, _ = load_split(Path(__file__).resolve().parents[1] / "data" / "train.csv")
+    reference = X.sample(3000, random_state=0)
+    current = X.sample(1000, random_state=1).assign(emp_length="NI")
+    table = feature_drift(reference, current).set_index("feature")
+    assert table.loc["emp_length", "reading"] == "invalid"
+    assert "emp_length" in drifted_features(table.reset_index(), "large")
+
+
+def test_a_rise_in_missing_values_alone_is_a_shift() -> None:
+    from loan_default.drift import feature_drift
+    from loan_default.preprocessing import load_split
+
+    X, _ = load_split(Path(__file__).resolve().parents[1] / "data" / "train.csv")
+    reference = X.sample(3000, random_state=0)
+    current = X.sample(1000, random_state=1).copy()
+    current.iloc[:300, current.columns.get_loc("emp_length")] = "NI"  # about 30% missing instead of 5%
+    assert feature_drift(reference, current).set_index("feature").loc["emp_length", "reading"] == "large"

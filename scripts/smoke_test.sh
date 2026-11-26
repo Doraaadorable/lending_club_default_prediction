@@ -20,9 +20,11 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: applicat
 
 # Latency: 200 sequential predictions; fail if the 95th percentile is above LATENCY_P95_MAX seconds.
 max_p95="${LATENCY_P95_MAX:-0.2}"
+# Every timed request must also succeed: a fast error must not pass as low latency.
 for _ in $(seq 1 200); do
-  curl -s -o /dev/null -w '%{time_total}\n' -X POST -H 'Content-Type: application/json' -d "$good" "$URL/predict"
-done | sort -n | awk -v max="$max_p95" '{t[NR] = $1} END {
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' -X POST -H 'Content-Type: application/json' -d "$good" "$URL/predict"
+done | awk '$1 != "200" {print "request failed with HTTP " $1 > "/dev/stderr"; bad = 1} {print $2} END {exit bad}' \
+  | sort -n | awk -v max="$max_p95" '{t[NR] = $1} END {
   p95 = t[int(NR * 0.95)]
   printf "Latency over %d requests: median %.3f s, p95 %.3f s (limit %.3f s)\n", NR, t[int(NR / 2)], p95, max
   if (p95 > max) exit 1

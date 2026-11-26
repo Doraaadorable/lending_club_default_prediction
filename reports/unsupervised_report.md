@@ -45,4 +45,4 @@ Silhouette scores are low and fall slowly with k: the borrowers form a continuum
 |---|---:|---:|---:|---:|---:|---:|
 | production features | 0.6633 | 0.2998 | 0.6639 | 0.3599 | 19.48% | +0.0000 |
 | first 19 principal components only | 0.6596 | 0.2939 | 0.6624 | 0.3581 | 19.45% | -0.0016 |
-| production + distances to 4 cluster centres | 0.6631 | 0.2995 | 0.6640 | 0.3595 | 19.47% | +0.0001 |
+| production + distances to 4 k-means centres fitted on all preprocessed features | 0.6631 | 0.2995 | 0.6640 | 0.3595 | 19.47% | +0.0001 |

@@ -62,3 +62,29 @@ def test_causal_frame_treats_loans_of_at_least_a_quarter_of_income(small_train: 
     expected = (X["loan_amnt"] / X["revenue"] >= 0.25).to_numpy()
     assert (t.astype(bool) == expected).all()
     assert "loan_amnt" not in W.columns  # the treatment's own variable is not a confounder
+
+
+def test_support_by_income_counts_treated_loans_per_band() -> None:
+    from loan_default.causal import support_by_income
+
+    W = pd.DataFrame({"log_income": np.log([30_000, 30_000, 200_000, 200_000])})
+    table = support_by_income(W, np.array([1, 0, 0, 0])).set_index("income")
+    assert table.loc["$0k-40k", "share"] == 0.5
+    assert table.loc["$140k and over", "treated"] == 0  # no comparison possible there
+
+
+def test_effective_sample_size_falls_as_weights_concentrate() -> None:
+    from loan_default.causal import effective_sample_size
+
+    assert effective_sample_size(np.ones(100)) == pytest.approx(100)
+    assert effective_sample_size(np.r_[np.ones(99), 100.0]) < 10
+
+
+def test_sensitivity_reports_each_estimate_with_its_population() -> None:
+    from loan_default.causal import sensitivity
+
+    W, t, y = confounded(n=3000)
+    table = sensitivity(t, y, cross_fit(W, t, y, folds=3, max_iter=60))
+    assert len(table) == 4
+    assert table["n"].iloc[2] <= len(y)  # trimming keeps only the overlap region
+    assert table["ate"].between(0, 0.3).all()
