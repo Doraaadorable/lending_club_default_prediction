@@ -17,7 +17,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             requirements.txt
-      - run: pip install -c requirements.txt -e ".[dev,serve,tracking]"
+      - run: pip install -c requirements.txt -e ".[dev,serve,tracking,research]"
       - name: Lint (unused code, naming, missing type hints and docstrings)
         run: ruff check .
       - name: Formatting
@@ -59,15 +59,21 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             requirements.txt
-      - run: pip install -c requirements.txt -e .
+      - run: pip install -c requirements.txt -e ".[research]"
       - name: Year-by-year validation
         run: python -m loan_default.temporal --out-dir analysis
       - name: Drift between training data and 2016
         run: python -m loan_default.drift --out-dir analysis
       - name: Replay 2016 through the monitors
         run: python -m loan_default.replay --out-dir analysis --log-dir "$RUNNER_TEMP/replay"
+      - name: Fairness audit of the approval policy
+        run: python -m loan_default.fairness --out-dir analysis
+      - name: SHAP explanations and reason codes
+        run: python -m loan_default.explain --out-dir analysis
       - name: Add the reports to the run summary
-        run: cat analysis/temporal_validation.md analysis/drift_report.md analysis/replay_report.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          cat analysis/temporal_validation.md analysis/drift_report.md analysis/replay_report.md \
+            analysis/fairness_report.md analysis/explainability_report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: analysis-reports

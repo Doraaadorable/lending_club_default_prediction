@@ -1,0 +1,10 @@
+field,mean_abs_shap,direction
+fico_n,0.3142115000724189,higher lowers risk
+loan_to_income,0.23692316400720884,higher raises risk
+dti_n,0.17599239881098408,higher raises risk
+purpose,0.109101154851518,
+home_ownership_n,0.10769804905558897,
+loan_amnt,0.09948074517443684,higher raises risk
+addr_state,0.09038356145191415,
+emp_length,0.030580347898358045,mixed
+revenue,0.02681420565770417,higher lowers risk
