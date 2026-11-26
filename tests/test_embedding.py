@@ -81,3 +81,26 @@ def test_network_clones_like_any_scikit_learn_estimator() -> None:
 def test_nearest_levels_uses_cosine_similarity() -> None:
     table = pd.DataFrame([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]], index=["a", "b", "c"])
     assert nearest_levels(table, "a", k=2) == ["b", "c"]
+
+
+def test_loss_and_gradient_agree_at_extreme_scores() -> None:
+    params = {
+        "E0": np.zeros((2, 1)),
+        "W1": np.ones((2, 1)),
+        "b1": np.zeros(1),
+        "w2": np.array([40.0]),
+        "b2": np.zeros(1),
+    }
+    numeric = np.array([[2.0], [3.0]])  # logits of 80 and 120, far past any clipping point
+    codes = np.zeros((2, 1), dtype=np.int64)
+    y = np.array([0.0, 0.0])
+    p, cache = forward(params, numeric, codes)
+    grads = backward(params, cache, p, codes, y, weight_decay=0.0)
+    eps = 1e-6
+    plus = {k: v.copy() for k, v in params.items()}
+    minus = {k: v.copy() for k, v in params.items()}
+    plus["b2"][0] += eps
+    minus["b2"][0] -= eps
+    numerical = (loss(plus, numeric, codes, y, 0.0) - loss(minus, numeric, codes, y, 0.0)) / (2 * eps)
+    assert grads["b2"][0] == pytest.approx(numerical, rel=1e-5)
+    assert np.isfinite(loss(params, numeric, codes, y, 0.0))

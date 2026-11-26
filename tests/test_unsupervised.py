@@ -41,3 +41,14 @@ def test_describe_names_the_most_distinctive_traits() -> None:
         }
     )
     assert describe(table.iloc[2], table, n_traits=1) == "higher FICO"
+
+
+def test_a_loan_gets_the_same_profile_in_any_batch(small_train: tuple[pd.DataFrame, pd.Series]) -> None:
+    X = small_train[0]
+    _, fitted = profile_matrix(X)
+    one = X.head(1).assign(emp_length="NI")
+    batch_a = pd.concat([one, X.iloc[1:50]])
+    batch_b = pd.concat([one, X.iloc[50:100].assign(emp_length="10+ years")])
+    first_a, _ = profile_matrix(batch_a, fitted)
+    first_b, _ = profile_matrix(batch_b, fitted)
+    assert np.allclose(first_a[0], first_b[0])

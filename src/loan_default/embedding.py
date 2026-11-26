@@ -61,7 +61,8 @@ def embedding_size(n_levels: int, max_dim: int) -> int:
 
 
 def _sigmoid(z: Array) -> Array:
-    out: Array = 1.0 / (1.0 + np.exp(-np.clip(z, -30, 30)))
+    """Logistic function without clipping, so it stays consistent with the gradient in backward()."""
+    out: Array = np.exp(-np.logaddexp(0.0, -z))
     return out
 
 
@@ -73,14 +74,17 @@ def forward(params: dict[str, Array], numeric: Array, codes: NDArray[np.int64]) 
     hidden_in = inputs @ params["W1"] + params["b1"]
     hidden = np.maximum(hidden_in, 0.0)
     logit = hidden @ params["w2"] + params["b2"]
-    return _sigmoid(logit), {"inputs": inputs, "hidden_in": hidden_in, "hidden": hidden}
+    return _sigmoid(logit), {"inputs": inputs, "hidden_in": hidden_in, "hidden": hidden, "logit": logit}
 
 
 def loss(params: dict[str, Array], numeric: Array, codes: NDArray[np.int64], y: Array, weight_decay: float) -> float:
-    """Mean log loss plus L2 weight decay on the weights and embeddings."""
-    p, _ = forward(params, numeric, codes)
-    p = np.clip(p, 1e-12, 1 - 1e-12)
-    log_loss = -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+    """Mean log loss plus L2 weight decay on the weights and embeddings.
+
+    Log loss is computed from the logits (log(1 + e^z) - y z), which is exact and stable at any score.
+    """
+    _, cache = forward(params, numeric, codes)
+    logit = cache["logit"]
+    log_loss = np.mean(np.logaddexp(0.0, logit) - y * logit)
     penalty = sum(float((value**2).sum()) for name, value in params.items() if not name.startswith("b"))
     return float(log_loss + 0.5 * weight_decay * penalty)
 

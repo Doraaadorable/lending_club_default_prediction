@@ -4,12 +4,13 @@
 
 Two questions, kept apart because they can disagree:
 
-1. Reconstruction. Hide a random 10% of known FICO, DTI and employment-length values, impute
-   them with each method, and compare with the truth. This rewards a method for guessing well.
+1. Reconstruction. Fit each imputer on one half of a sample, then hide a random 10% of the known
+   FICO, DTI and employment-length values in the other half, impute them, and compare with the
+   truth. This rewards a method for guessing well on loans it was not fitted on.
 2. Usefulness. Fit the tuned gradient boosting pipeline with each imputer and compare CV and
    2016 ranking. This rewards whatever helps predict default, including the fact that a value
-   was missing at all. Employment length is missing far more often among loans that default
-   (it is not missing at random), so a missing-value flag can matter more than the fill value.
+   was missing at all. Loans without an employment length default more often, so whether the
+   value is missing carries information, and a missing-value flag can matter more than the fill.
 """
 
 import argparse
@@ -61,15 +62,21 @@ def mask_at_random(
 
 
 def reconstruction_error(X: pd.DataFrame, strategies: tuple[str, ...] = IMPUTERS, seed: int = SEED) -> pd.DataFrame:
-    """RMSE and MAE of each imputer on values hidden at random, in each column's original units."""
-    cleaned = clean(X)[NUMERIC + SKEWED].copy()
-    cleaned[SKEWED] = np.log1p(cleaned[SKEWED])
+    """RMSE and MAE of each imputer on values hidden at random, in each column's original units.
+
+    Half of `X` is used to fit each imputer (with its own, natural gaps); the other half has values
+    hidden and is only transformed, so no imputer is scored on loans it was fitted on.
+    """
+    frame = clean(X)[NUMERIC + SKEWED].copy()
+    frame[SKEWED] = np.log1p(frame[SKEWED])
+    fit_rows = np.random.default_rng(seed).random(len(frame)) < 0.5
+    fit_part, cleaned = frame[fit_rows], frame[~fit_rows]
     masked, hidden = mask_at_random(cleaned, NUMERIC, MASK_SHARE, seed)
-    scaler = StandardScaler().fit(masked)
+    scaler = StandardScaler().fit(fit_part)
     rows = []
     for strategy in strategies:
-        imputer = make_imputer(strategy, add_indicator=False, seed=seed)
-        filled = scaler.inverse_transform(imputer.fit_transform(scaler.transform(masked)))
+        imputer = make_imputer(strategy, add_indicator=False, seed=seed).fit(scaler.transform(fit_part))
+        filled = scaler.inverse_transform(imputer.transform(scaler.transform(masked)))
         filled_frame = pd.DataFrame(filled, columns=cleaned.columns, index=cleaned.index)
         for column in NUMERIC:
             rows_hidden = hidden[column].to_numpy()
@@ -90,11 +97,11 @@ def candidates(params: dict[str, float | int] = TUNED_PARAMS, seed: int = SEED) 
     """The tuned model with each imputer; the first entry is the production pipeline."""
     tuned = build_model(params, seed)
     models: dict[str, Pipeline] = {"median + missing flag (production)": tuned}
-    for strategy, label in [("mean", "mean"), ("iterative", "iterative (MICE)"), ("knn", "KNN, k = 10")]:
+    for strategy, label in [("mean", "mean"), ("iterative", "iterative (MICE-style)"), ("knn", "KNN, k = 10")]:
         model = build_model(params, seed)
         model.set_params(preprocess=build_preprocessor(numeric_imputer=strategy))
         models[f"{label} + missing flag"] = model
-    for strategy, label in [("median", "median"), ("iterative", "iterative (MICE)")]:
+    for strategy, label in [("median", "median"), ("iterative", "iterative (MICE-style)")]:
         model = build_model(params, seed)
         model.set_params(preprocess=build_preprocessor(numeric_imputer=strategy, add_indicator=False))
         models[f"{label}, no flag"] = model
@@ -121,8 +128,8 @@ def render_report(missingness: pd.DataFrame, errors: pd.DataFrame, results: pd.D
         )
     lines += [
         "",
-        f"## 1. Recovering values hidden at random ({MASK_SHARE:.0%} of known values, "
-        f"{RECONSTRUCTION_SAMPLE:,}-loan sample)",
+        f"## 1. Recovering values hidden at random ({MASK_SHARE:.0%} of known values; imputers fitted on half "
+        f"of a {RECONSTRUCTION_SAMPLE:,}-loan sample, scored on the other half)",
         "",
         "| Column | " + " | ".join(f"{s} RMSE" for s in errors["imputer"].unique()) + " |",
         "|---|" + "---:|" * errors["imputer"].nunique(),

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from loan_default.explain import additivity_error, by_field, field_of, global_importance, reason_codes, shap_values
+from loan_default.explain import additivity_error, by_field, field_of, global_importance, shap_values, top_contributors
 from loan_default.preprocessing import clean
 from loan_default.train import build_model
 
@@ -35,10 +35,10 @@ def test_by_field_sums_the_columns_of_one_field() -> None:
     assert out.loc[0, "fico_n"] == pytest.approx(-0.3)
 
 
-def test_reason_codes_list_only_fields_that_raised_risk_largest_first() -> None:
+def test_top_contributors_list_only_fields_that_raised_the_score_largest_first() -> None:
     contributions = pd.Series({"fico_n": 0.4, "loan_to_income": 0.6, "revenue": -0.2, "dti_n": 0.1})
-    assert reason_codes(contributions, k=2) == ["Amount requested is large relative to income", "Credit score"]
-    assert len(reason_codes(contributions, k=5)) == 3
+    assert top_contributors(contributions, k=2) == ["Amount requested is large relative to income", "Credit score"]
+    assert len(top_contributors(contributions, k=5)) == 3
 
 
 def test_shap_values_add_up_to_the_model_log_odds(small_train: tuple[pd.DataFrame, pd.Series]) -> None:
@@ -49,3 +49,10 @@ def test_shap_values_add_up_to_the_model_log_odds(small_train: tuple[pd.DataFram
     importance = global_importance(fields, clean(X.head(200)))
     assert set(importance["field"]) == set(fields.columns)
     assert importance["mean_abs_shap"].is_monotonic_decreasing
+
+
+def test_loan_size_group_sums_the_related_fields_before_the_absolute_value() -> None:
+    from loan_default.explain import grouped_importance
+
+    fields = pd.DataFrame({"loan_amnt": [0.3, -0.1], "revenue": [-0.3, -0.1], "loan_to_income": [0.1, 0.0]})
+    assert grouped_importance(fields) == pytest.approx((0.1 + 0.2) / 2)

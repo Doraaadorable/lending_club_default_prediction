@@ -117,7 +117,7 @@ def make_imputer(
     """Imputer for the numeric block.
 
     median, mean : one constant per column (the project default is median)
-    iterative    : MICE-style chained regressions; each column is predicted from all the others
+    iterative    : MICE-style chained regressions (one imputation); each column predicted from the others
     knn          : average of the 10 most similar loans on the other numeric columns
     """
     if strategy in {"median", "mean"}:

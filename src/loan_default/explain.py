@@ -8,9 +8,12 @@ Global
     flag) are summed back into that field, so the explanation speaks the applicant's language.
     Permutation importance and partial dependence / ICE curves give a model-agnostic second view.
 Local
-    For individual applicants: the fields that pushed their score up most. For a rejected applicant
-    these are the "principal reasons" a US lender must state in an adverse action notice (ECOA /
-    Regulation B), so the report shows them as reason codes.
+    For individual applicants: the fields that pushed their score up most, relative to the average
+    applicant in the SHAP background. These resemble the reasons an adverse action notice lists, but
+    they are model contributions, not validated decline reasons: they are measured against an average
+    applicant rather than the approval cutoff, related fields (loan amount, income, loan-to-income)
+    can describe one mechanism twice, and their wording has not been reviewed. The API does not
+    return them.
 """
 
 import argparse
@@ -98,13 +101,27 @@ def global_importance(fields: pd.DataFrame, raw: pd.DataFrame) -> pd.DataFrame:
         if pd.api.types.is_numeric_dtype(raw[field]):
             known = raw[field].notna().to_numpy()
             corr = np.corrcoef(raw.loc[known, field], fields.loc[known, field])[0, 1]
-            direction = "higher raises risk" if corr > 0.1 else "higher lowers risk" if corr < -0.1 else "mixed"
+            direction = (
+                "higher value, higher attribution"
+                if corr > 0.1
+                else "higher value, lower attribution"
+                if corr < -0.1
+                else "mixed"
+            )
         rows.append({"field": field, "mean_abs_shap": float(fields[field].abs().mean()), "direction": direction})
     return pd.DataFrame(rows).sort_values("mean_abs_shap", ascending=False, ignore_index=True)
 
 
-def reason_codes(contributions: pd.Series, k: int = 3) -> list[str]:
-    """The k fields that raised this applicant's risk most (positive SHAP), as reason statements."""
+LOAN_SIZE_GROUP = ("loan_amnt", "revenue", "loan_to_income")
+
+
+def grouped_importance(fields: pd.DataFrame) -> float:
+    """Mean |SHAP| of loan amount, income and loan-to-income together: they share one mechanism."""
+    return float(fields[list(LOAN_SIZE_GROUP)].sum(axis=1).abs().mean())
+
+
+def top_contributors(contributions: pd.Series, k: int = 3) -> list[str]:
+    """The k fields that raised this applicant's score most (positive SHAP), described in plain words."""
     raising = contributions[contributions > 0].sort_values(ascending=False)
     return [REASONS[field] for field in raising.index[:k]]
 
@@ -146,7 +163,8 @@ def local_examples(fields: pd.DataFrame, raw: pd.DataFrame, scores: Array, cutof
         if decision == "reject":
             lines += [
                 "",
-                "Reason codes: " + "; ".join(f"{n}. {r}" for n, r in enumerate(reason_codes(contributions), 1)),
+                "Largest contributions to the score: "
+                + "; ".join(f"{n}. {r}" for n, r in enumerate(top_contributors(contributions), 1)),
             ]
         lines.append("")
     return lines
@@ -223,7 +241,12 @@ def plot_partial_dependence(model: Pipeline, X: pd.DataFrame, figures: Path) -> 
 
 
 def render_report(
-    importance: pd.DataFrame, permutation: dict[str, float], error: float, base: float, examples: list[str]
+    importance: pd.DataFrame,
+    permutation: dict[str, float],
+    error: float,
+    base: float,
+    examples: list[str],
+    loan_size: float,
 ) -> str:
     """Write the findings as Markdown."""
     lines = [
@@ -245,8 +268,13 @@ def render_report(
         lines.append(f"| {r.field} | {r.mean_abs_shap:.3f} | {r.direction} | {perm_text} |")
     lines += [
         "",
-        "`loan_to_income` is computed from `loan_amnt` and `revenue`; SHAP credits it separately, while permutation "
-        "importance shuffles the raw fields and so moves it with them.",
+        "Direction is the sign of the correlation between a field's value and its SHAP value in this model, "
+        "not a causal effect.",
+        "",
+        "`loan_to_income` is computed from `loan_amnt` and `revenue`, so the three share one mechanism and how SHAP "
+        "splits credit among them depends on the model's representation. Taken together their mean absolute SHAP "
+        f"value is {loan_size:.3f}. Permutation importance shuffles a raw field and recomputes the ratio, so it "
+        "measures each raw field's direct and derived paths together.",
         "",
         "![SHAP importance](figures/shap_importance.png)",
         "",
@@ -256,11 +284,14 @@ def render_report(
         "",
         "![Partial dependence](figures/partial_dependence.png)",
         "",
-        "## Individual applicants and reason codes",
+        "## Individual applicants: largest contributions to the score",
+        "",
+        "Contributions are measured against the average applicant in the SHAP background, not against the approval "
+        "cutoff. They are not validated adverse action reasons, and the service does not return them.",
         "",
         *examples,
-        "State of residence can appear as a reason. A lender should check with compliance whether a geographic "
-        "reason is acceptable, since geography can proxy for protected characteristics (see the fairness report).",
+        "State of residence can appear among the largest contributions; geography can proxy for protected "
+        "characteristics (see the fairness report).",
         "",
     ]
     return "\n".join(lines)
@@ -284,7 +315,9 @@ def run(splits: Splits, out_dir: Path) -> str:
     plot_global(importance, fields, raw, figures)
     plot_dependence(fields, raw, figures)
     plot_partial_dependence(model, sample, figures)
-    report = render_report(importance, permutation, error, base, local_examples(fields, raw, scores, cutoff))
+    report = render_report(
+        importance, permutation, error, base, local_examples(fields, raw, scores, cutoff), grouped_importance(fields)
+    )
     write_report(out_dir, "explainability_report", report, importance)
     return report
 

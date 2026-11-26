@@ -1,12 +1,13 @@
-"""Causal inference: does borrowing a large share of income raise the chance of default?
+"""Observational causal inference: is borrowing a large share of income linked to more default, after adjustment?
 
     python -m loan_default.causal        # writes reports/causal_report.md and .csv
 
 A predictive model says that loans which are large for the borrower's income default more often.
-A lending-policy team wants to know something different: if the same borrower were offered a
-smaller loan, would they be less likely to default? Borrowers who take large loans differ in
-other ways (purpose, credit history, housing), so the raw difference mixes the effect of the loan
-with the effect of who asks for it.
+Borrowers who take large loans differ in other ways (purpose, credit history, housing), so the raw
+difference mixes the loan with who asks for it. This module estimates the difference that remains
+after adjusting for what is recorded at application. It reads as a causal effect only under the
+assumptions below, and it describes a binary contrast, not the effect of a lending policy such as
+a cap (which would also change who borrows and on what terms).
 
 Treatment   loan amount at least 25% of annual income (37% of 2007-2015 loans)
 Outcome     default (charged off)
@@ -23,14 +24,17 @@ inverse propensity      reweight loans by 1 / P(treatment | covariates) (Hajek e
 doubly robust (AIPW)    regression adjustment corrected by the weighted residuals; consistent if
                         either the outcome or the propensity model is right; gives a standard error
 
-Checks: covariate balance before and after weighting, propensity overlap, and three refutation
-tests (placebo treatment, an added random confounder, and a random half of the data).
+Checks: common support by income (treatment is defined from income, so large loans are absent at
+high incomes), raw propensity overlap and effective sample sizes, covariate balance, sensitivity
+to clipping, trimming to the overlap region and overlap weighting, and three stability checks
+(placebo treatment, an added random confounder, a random half of the data). The stability checks
+test the estimator, not the no-unrecorded-confounding assumption.
 
 What it cannot fix: confounders the data does not record. Lending Club set the interest rate,
 grade and term (36 or 60 months) after seeing the application, and larger loans are more often
-60-month loans. Term and rate are partly consequences of the loan size (mediators) and partly
-signals of the lender's private information, so the estimate is the effect of a large loan
-including the terms that come with it, under the assumption of no unrecorded confounding.
+60-month loans. Term and rate may be consequences of the loan size (mediators), signals of the
+lender's private information (confounders), or both; the data cannot tell which, so it cannot
+say which paths the estimate includes.
 """
 
 import argparse
@@ -99,11 +103,15 @@ def nuisance_model(numeric: list[str], seed: int = SEED, max_iter: int = 300) ->
 
 @dataclass(frozen=True)
 class Nuisance:
-    """Cross-fitted propensity and outcome predictions for every loan."""
+    """Cross-fitted propensity and outcome predictions for every loan (propensity as predicted, not clipped)."""
 
     propensity: Array
     outcome_treated: Array
     outcome_control: Array
+
+    def clipped(self, clip: float = CLIP) -> "Nuisance":
+        """The same predictions with the propensity clipped to [clip, 1 - clip]."""
+        return Nuisance(np.clip(self.propensity, clip, 1 - clip), self.outcome_treated, self.outcome_control)
 
 
 def cross_fit(
@@ -124,7 +132,7 @@ def cross_fit(
         mu0[held_idx] = (
             nuisance_model(numeric, seed, max_iter).fit(W_fit[control], y_fit[control]).predict_proba(W_held)[:, 1]
         )
-    return Nuisance(np.clip(propensity, CLIP, 1 - CLIP), mu1, mu0)
+    return Nuisance(propensity, mu1, mu0)
 
 
 def aipw_scores(t: NDArray[np.int64], y: Array, n: Nuisance) -> Array:
@@ -138,8 +146,9 @@ def aipw_scores(t: NDArray[np.int64], y: Array, n: Nuisance) -> Array:
     return out
 
 
-def estimates(t: NDArray[np.int64], y: Array, n: Nuisance) -> dict[str, dict[str, float]]:
-    """ATE from each estimator; AIPW also gets a 95% confidence interval."""
+def estimates(t: NDArray[np.int64], y: Array, n: Nuisance, clip: float = CLIP) -> dict[str, dict[str, float]]:
+    """ATE from each estimator (propensities clipped to [clip, 1 - clip]); AIPW also gets a 95% interval."""
+    n = n.clipped(clip)
     w1, w0 = t / n.propensity, (1 - t) / (1 - n.propensity)
     scores = aipw_scores(t, y, n)
     se = float(scores.std(ddof=1) / np.sqrt(len(y)))
@@ -213,7 +222,7 @@ def refutations(W: pd.DataFrame, t: NDArray[np.int64], y: Array, seed: int = SEE
 
 def effect_by_fico(W: pd.DataFrame, t: NDArray[np.int64], y: Array, n: Nuisance) -> pd.DataFrame:
     """AIPW effect within FICO bands (averaging the doubly robust scores in each band)."""
-    scores = aipw_scores(t, y, n)
+    scores = aipw_scores(t, y, n.clipped())
     rows = []
     for name, (low, high) in FICO_BANDS.items():
         band = W["fico_n"].between(low, high, inclusive="left").to_numpy()
@@ -231,14 +240,85 @@ def effect_by_fico(W: pd.DataFrame, t: NDArray[np.int64], y: Array, n: Nuisance)
     return pd.DataFrame(rows)
 
 
+def effective_sample_size(weights: Array) -> float:
+    """Kish effective sample size: how many equally weighted loans the weights are worth."""
+    return float(weights.sum() ** 2 / (weights**2).sum())
+
+
 def overlap_summary(t: NDArray[np.int64], propensity: Array) -> dict[str, float]:
-    """How much of each group has propensities in the thin tails, where weights get large."""
-    return {
-        "treated_median": float(np.median(propensity[t == 1])),
-        "control_median": float(np.median(propensity[t == 0])),
+    """Raw propensity quantiles by group, tail shares, and the effective sample size of the clipped weights."""
+    clipped = np.clip(propensity, CLIP, 1 - CLIP)
+    weights = t / clipped + (1 - t) / (1 - clipped)
+    summary = {
         "share_outside_5_95": float(((propensity < 0.05) | (propensity > 0.95)).mean()),
-        "max_weight": float(np.max(t / propensity + (1 - t) / (1 - propensity))),
+        "share_clipped": float(((propensity < CLIP) | (propensity > 1 - CLIP)).mean()),
+        "max_weight": float(np.max(weights)),
+        "ess_treated": effective_sample_size(weights[t == 1]),
+        "ess_control": effective_sample_size(weights[t == 0]),
+        "n_treated": float((t == 1).sum()),
+        "n_control": float((t == 0).sum()),
     }
+    for group, mask in (("treated", t == 1), ("control", t == 0)):
+        for q in (0.01, 0.5, 0.99):
+            summary[f"{group}_q{int(q * 100)}"] = float(np.quantile(propensity[mask], q))
+    return summary
+
+
+INCOME_BANDS = [(0, 40_000), (40_000, 75_000), (75_000, 120_000), (120_000, 140_000), (140_000, float("inf"))]
+
+
+def support_by_income(W: pd.DataFrame, t: NDArray[np.int64]) -> pd.DataFrame:
+    """Loans and share treated per income band: where one group is (nearly) absent there is no comparison."""
+    income = np.exp(W["log_income"].to_numpy())
+    rows = []
+    for low, high in INCOME_BANDS:
+        band = (income >= low) & (income < high)
+        label = f"${low / 1000:.0f}k and over" if np.isinf(high) else f"${low / 1000:.0f}k-{high / 1000:.0f}k"
+        rows.append(
+            {"income": label, "n": int(band.sum()), "treated": int(t[band].sum()), "share": float(t[band].mean())}
+        )
+    return pd.DataFrame(rows)
+
+
+OVERLAP_REGION = (0.1, 0.9)  # Crump, Hotz, Imbens & Mitnik (2009) rule of thumb
+
+
+def sensitivity(t: NDArray[np.int64], y: Array, n: Nuisance) -> pd.DataFrame:
+    """The adjusted difference under other clipping, trimming and weighting choices, each with its own target."""
+    rows = []
+    for clip in (0.01, 0.05):
+        r = estimates(t, y, n, clip)["doubly robust (AIPW)"]
+        rows.append(
+            {"estimate": f"AIPW, propensities clipped to [{clip}, {1 - clip}]", "population": "all loans", "n": len(y)}
+            | r
+        )
+    inside = (n.propensity >= OVERLAP_REGION[0]) & (n.propensity <= OVERLAP_REGION[1])
+    scores = aipw_scores(
+        t[inside], y[inside], Nuisance(n.propensity[inside], n.outcome_treated[inside], n.outcome_control[inside])
+    )
+    se = float(scores.std(ddof=1) / np.sqrt(inside.sum()))
+    rows.append(
+        {
+            "estimate": f"AIPW, loans with propensity {OVERLAP_REGION[0]}-{OVERLAP_REGION[1]}",
+            "population": f"{inside.mean():.0%} of loans, where both groups are common",
+            "n": int(inside.sum()),
+            "ate": float(scores.mean()),
+            "se": se,
+            "low": float(scores.mean() - 1.96 * se),
+            "high": float(scores.mean() + 1.96 * se),
+        }
+    )
+    w1, w0 = t * (1 - n.propensity), (1 - t) * n.propensity
+    overlap = float((w1 * y).sum() / w1.sum() - (w0 * y).sum() / w0.sum())
+    rows.append(
+        {
+            "estimate": "overlap weights (Li, Morgan & Zaslavsky 2018)",
+            "population": "loans weighted towards those that could have gone either way",
+            "n": len(y),
+            "ate": overlap,
+        }
+    )
+    return pd.DataFrame(rows)
 
 
 def _pp(value: float) -> str:
@@ -252,17 +332,24 @@ def render_report(
     refuted: pd.DataFrame,
     by_fico: pd.DataFrame,
     treated_share: float,
+    support: dict[str, pd.DataFrame],
+    sensitive: pd.DataFrame,
 ) -> str:
     """Write the findings as Markdown."""
     lines = [
-        "# Causal effect of a large loan relative to income",
+        "# Adjusted effect of a large loan relative to income",
         "",
         "Generated by `python -m loan_default.causal`.",
         "",
         f"Treatment: loan amount at least {THRESHOLD:.0%} of annual income ({treated_share:.1%} of 2007-2015 loans). "
-        "Outcome: default. Effects are in percentage points (pp) of default probability.",
+        "Outcome: default. Differences are in percentage points (pp) of default probability.",
         "",
-        "## Average treatment effect",
+        "These are observational estimates. They equal a causal effect only if the recorded application fields "
+        "capture everything that drives both the loan size and default (no unrecorded confounding), and only for "
+        "the binary contrast at 25%. They do not describe the effect of a lending policy such as a cap, which would "
+        "also change which loans are taken and on what terms. Interest rate, grade and term are not in the data.",
+        "",
+        "## Adjusted difference (average treatment effect under those assumptions)",
         "",
         "| Estimator | 2007-2015 | 2016 (replication) |",
         "|---|---:|---:|",
@@ -278,30 +365,73 @@ def render_report(
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
     lines += [
         "",
-        "## Is the comparison fair? Covariate balance",
+        "## Common support by income",
         "",
-        "Standardized mean difference between treated and control loans; below 0.1 is usually read as balanced.",
+        "Treatment is defined from income, so at high incomes a large loan is rare or impossible "
+        "(the maximum loan was $35,000 up to 2015 and $40,000 in 2016). Where one group is absent, "
+        "the all-loans estimate relies on the outcome model extrapolating.",
+        "",
+        "| Income | Loans 2007-2015 | Treated | Share | Loans 2016 | Treated | Share |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for a, b in zip(support["2007-2015"].itertuples(), support["2016"].itertuples(), strict=True):
+        lines.append(
+            f"| {a.income} | {a.n:,} | {a.treated:,} | {a.share:.1%} | {b.n:,} | {b.treated:,} | {b.share:.1%} |"
+        )
+    lines += [
+        "",
+        "## Propensity overlap (as predicted, before clipping)",
+        "",
+        "| Group | 1st percentile | Median | 99th percentile |",
+        "|---|---:|---:|---:|",
+        *[
+            f"| {group} | {overlap[f'{group}_q1']:.3f} | {overlap[f'{group}_q50']:.3f} | "
+            f"{overlap[f'{group}_q99']:.3f} |"
+            for group in ("treated", "control")
+        ],
+        "",
+        f"{overlap['share_outside_5_95']:.1%} of loans have a propensity outside 0.05-0.95 and "
+        f"{overlap['share_clipped']:.1%} are clipped at [{CLIP}, {1 - CLIP}]. "
+        f"Largest weight {overlap['max_weight']:.0f}. "
+        f"Effective sample size of the weights: {overlap['ess_treated']:,.0f} of {overlap['n_treated']:,.0f} treated, "
+        f"{overlap['ess_control']:,.0f} of {overlap['n_control']:,.0f} control loans.",
+        "",
+        "## Covariate balance",
+        "",
+        "Standardized mean difference between treated and control loans; below 0.1 is usually read as balanced. "
+        "Income stays imbalanced after weighting, as the support table explains.",
         "",
         "| Covariate | Before weighting | After weighting |",
         "|---|---:|---:|",
         *[f"| {r.covariate} | {r.smd_before:+.3f} | {r.smd_after:+.3f} |" for r in balance.itertuples()],
         "",
-        f"Propensity overlap: median {overlap['treated_median']:.2f} among treated and "
-        f"{overlap['control_median']:.2f} among control loans; {overlap['share_outside_5_95']:.1%} of loans "
-        f"fall outside 0.05-0.95; largest weight {overlap['max_weight']:.0f}.",
+        "## Sensitivity to clipping, trimming and weighting (2007-2015)",
         "",
-        "## Refutation tests (AIPW)",
+        "Each row answers a slightly different question: the trimmed and overlap-weighted rows describe the loans "
+        "that could plausibly have been either large or small for the borrower, not all loans.",
         "",
-        "| Test | Expected | Estimate | 95% CI |",
+        "| Estimate | Population | Loans | Difference | 95% CI |",
+        "|---|---|---:|---:|---|",
+    ]
+    for r in sensitive.itertuples():
+        interval = f"{r.low * 100:+.2f} to {r.high * 100:+.2f} pp" if np.isfinite(getattr(r, "low", np.nan)) else "n/a"
+        lines.append(f"| {r.estimate} | {r.population} | {r.n:,} | {_pp(r.ate)} | {interval} |")
+    lines += [
+        "",
+        "## Stability checks (AIPW)",
+        "",
+        "These check that the estimator behaves; they cannot test the no-unrecorded-confounding assumption.",
+        "",
+        "| Check | Expected | Estimate | 95% CI |",
         "|---|---|---:|---|",
         *[
             f"| {r.test} | {r.expected} | {_pp(r.ate)} | {r.low * 100:+.2f} to {r.high * 100:+.2f} pp |"
             for r in refuted.itertuples()
         ],
         "",
-        "## Does the effect differ by credit score?",
+        "## Differences by credit score (a lead for further study, not a policy recommendation)",
         "",
-        "| FICO band | Loans | Share treated | Effect (AIPW) | 95% CI |",
+        "| FICO band | Loans | Share treated | Difference (AIPW) | 95% CI |",
         "|---|---:|---:|---:|---|",
         *[
             f"| {r.fico_band} | {r.n:,} | {r.share_treated:.1%} | {_pp(r.ate)} | "
@@ -324,10 +454,20 @@ def run(splits: Splits, out_dir: Path) -> str:
         "2007-2015": estimates(t, y, nuisance),
         "2016": estimates(t_test, y_test, cross_fit(W_test, t_test, y_test)),
     }
-    balance = balance_table(W, t, nuisance.propensity)
+    balance = balance_table(W, t, nuisance.clipped().propensity)
     refuted = refutations(W, t, y)
     by_fico = effect_by_fico(W, t, y, nuisance)
-    report = render_report(results, balance, overlap_summary(t, nuisance.propensity), refuted, by_fico, float(t.mean()))
+    support = {"2007-2015": support_by_income(W, t), "2016": support_by_income(W_test, t_test)}
+    report = render_report(
+        results,
+        balance,
+        overlap_summary(t, nuisance.propensity),
+        refuted,
+        by_fico,
+        float(t.mean()),
+        support,
+        sensitivity(t, y, nuisance),
+    )
     table = pd.DataFrame(
         [{"period": period, "estimator": name} | values for period, r in results.items() for name, values in r.items()]
     )
