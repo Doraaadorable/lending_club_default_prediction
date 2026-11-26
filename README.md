@@ -1,12 +1,12 @@
 # Loan Default Prediction: Balancing Approval and Risk
 
-Approving the lowest-risk 80% of 2016 loans with gradient boosting gives a 19.5% default rate among approved loans, against 21.6% when ranking by FICO alone and 23.3% with no screening. The model ranks risk as well in 2016 as in development, but its probabilities run almost 5 points low: the applicants looked the same, yet loans of the same predicted risk defaulted more often.
+Approving the lowest-risk 80% of 2016 loans with gradient boosting gives a 19.5% default rate among approved loans, against 21.6% when ranking by FICO alone and 23.3% with no screening. The model ranks risk as well in 2016 as in development, but its probabilities run almost 5 points low: no input field shifted noticeably (every PSI below 0.04), yet loans with the same score defaulted more often.
 
-![Default rate among approved 2016 loans by approval rate: gradient boosting below FICO alone at every rate](reports/figures/approval_curve.png)
+![Default rate among approved 2016 loans by approval rate, from 40% to 100%: gradient boosting below FICO alone at every rate under 100%, where the two meet](reports/figures/approval_curve.png)
 
-![2016 by month: actual default rate about 5 points above the mean predicted probability from March on](reports/figures/monthly_calibration.png)
+![2016 by month: actual default rate above the mean predicted probability, by 4.79 points on average and by more than 2 points in every month from March](reports/figures/monthly_calibration.png)
 
-Both figures are drawn by `python -m loan_default.figures` from the current package (the approval curve is in `reports/approval_curve.csv`).
+Both figures are drawn by `python -m loan_default.figures` from the current package (the approval curve is in `reports/approval_curve.csv`; the monthly figure reads the replay's `reports/replay_monthly.csv`). Headline numbers in this README come from the current package; sections 7–10 report notebook 05, which differs slightly because of library versions (section 16).
 
 ```bash
 python -m pip install -e ".[dev,serve,tracking]"
@@ -40,11 +40,11 @@ We compare five model families against a FICO-only logistic regression baseline 
 
 On the 2016 test sample, approving the lowest-risk **80%** using tuned gradient boosting produced:
 
-- **19.50%** default rate among approved loans.
-- **21.56%** with FICO alone at the same approval rate.
+- **19.48%** default rate among approved loans.
+- **21.57%** with FICO alone at the same approval rate.
 - **23.28%** across all test loans.
 
-At the same volume of **40,000 approved loans**, gradient boosting retained **827 fewer loans that ultimately defaulted** than the baseline.
+At the same volume of **40,000 approved loans**, gradient boosting retained **836 fewer loans that ultimately defaulted** than the baseline. (These are the current package's numbers, `reports/approval_curve.csv`; notebook 05, section 10, reports 19.50%, 21.56% and 827.)
 
 Risk ranking remained similar across CV and the later test cohort. However, the model underestimated 2016 default probabilities, making calibration an important remaining issue.
 
@@ -537,11 +537,11 @@ These are exploratory comparisons: one development sample, one test cohort, one 
 | Technique | Module | Report | Headline |
 |---|---|---|---|
 | Advanced imputation | `imputation` | [imputation_report.md](reports/imputation_report.md) | Iterative imputation recovers hidden values best; for the model, the missing flag matters more than the fill value |
-| Entity embeddings | `embedding` | [embedding_report.md](reports/embedding_report.md) | Boosting on learned embeddings: +0.0008 test ROC-AUC; adding ZIP makes it worse |
+| Entity embeddings | `embedding` | [embedding_report.md](reports/embedding_report.md) | Boosting on learned embeddings: +0.0007 test ROC-AUC; adding ZIP lowers ROC-AUC |
 | PCA and clustering | `unsupervised` | [unsupervised_report.md](reports/unsupervised_report.md) | Four readable borrower segments, default rates 9%–26%; no accuracy gain as features |
 | Semi-supervised learning | `semi_supervised` | [semi_supervised_report.md](reports/semi_supervised_report.md) | Label spreading helps when 1% of outcomes are known (+0.010 ROC-AUC); self-training hurts; labels matter far more than method |
 | Causal inference | `causal` | [causal_report.md](reports/causal_report.md) | After adjustment, loans of at least 25% of income default about 9 points more often; observational, under stated assumptions |
-| Bayesian HPO and AutoML | `hpo` | [hpo_report.md](reports/hpo_report.md) | Against a matched random-sampler run, TPE gains 0.0002 CV ROC-AUC and nothing on 2016; the surface is flat, so production keeps its parameters |
+| Bayesian HPO and AutoML | `hpo` | [hpo_report.md](reports/hpo_report.md) | Against a matched random-sampler run, TPE's best is 0.0002 higher in CV and no better on 2016; the surface is flat, so production keeps its parameters |
 | Explainability | `explain` | [explainability_report.md](reports/explainability_report.md) | FICO and loan size relative to income drive scores; per-applicant contributions (not validated decline reasons) |
 | Fairness audit | `fairness` | [fairness_report.md](reports/fairness_report.md) | Section 13 |
 
@@ -590,14 +590,14 @@ The iterative imputer recovers values best, but the application fields are only 
 | Model | CV ROC-AUC | Test ROC-AUC | Test AP | Test default rate, safest 80% |
 |---|---:|---:|---:|---:|
 | One-hot + target encoding (production) | 0.6633 | 0.6639 | 0.3599 | 19.48% |
-| Embedding network on its own | 0.6627 | 0.6637 | 0.3577 | 19.38% |
-| Boosting on learned embeddings | **0.6638** | **0.6647** | **0.3604** | 19.45% |
-| Embedding network, with ZIP | 0.6619 | 0.6626 | 0.3542 | 19.41% |
-| Boosting on learned embeddings, with ZIP | 0.6584 | 0.6607 | 0.3528 | 19.51% |
+| Embedding network on its own | 0.6626 | 0.6638 | 0.3577 | 19.39% |
+| Boosting on learned embeddings | **0.6642** | **0.6646** | **0.3606** | 19.45% |
+| Embedding network, with ZIP | 0.6606 | 0.6617 | 0.3557 | 19.38% |
+| Boosting on learned embeddings, with ZIP | 0.6584 | 0.6626 | 0.3571 | 19.38% |
 
-- **A one-layer network nearly matches gradient boosting** in ranking (0.6637 against 0.6639) and has the lowest default rate among the safest 80% (19.38% against 19.48%). Which model is "best" depends on the metric, and none of these differences is established.
-- **Embeddings as boosting inputs have the highest ROC-AUC** (+0.0008 test, +0.0005 CV), a small difference from one seed. There is also a design caveat: the network learns the embeddings from the same training rows that the boosting model then trains on, so rare categories can carry some of their own outcomes into the features, as target encoding does without cross-fitting. Testing the gain properly needs embeddings fitted on data the boosting model does not train on.
-- **ZIP code did not help in these two embedding models.** Its 879 prefixes, many with few loans, let both models fit noise, and test ROC-AUC falls by up to 0.003. That supports excluding ZIP (section 13) without evidence of an accuracy cost, but it does not show that ZIP has no predictive value in any representation.
+- **A one-layer network nearly matches gradient boosting** in ranking (0.6638 against 0.6639) and has a lower default rate among the safest 80% (19.39% against 19.48%). Which model is "best" depends on the metric, and none of these differences is established.
+- **Embeddings as boosting inputs have the highest ROC-AUC** (+0.0007 test, +0.0009 CV), a small difference from one seed. There is also a design caveat: the network learns the embeddings from the same training rows that the boosting model then trains on, so rare categories can carry some of their own outcomes into the features, as target encoding does without cross-fitting. Testing the gain properly needs embeddings fitted on data the boosting model does not train on.
+- **ZIP code did not help in these two embedding models.** Its 879 prefixes, many with few loans, let both models fit noise, and test ROC-AUC falls by 0.001–0.002 (their default rate among the safest 80% does not rise, so the evidence is mixed by metric). That supports excluding ZIP (section 13) without evidence of an accuracy cost, but it does not show that ZIP has no predictive value in any representation.
 - **The embeddings are interpretable.** The first principal component of the state embeddings correlates **0.90** with each state's default rate, so the network recovers what target encoding captures. The remaining dimensions group states with similar borrowers ([state_embeddings.png](reports/figures/state_embeddings.png)).
 
 ### 12.3 Dimensionality reduction and clustering
@@ -631,7 +631,7 @@ The segments separate default risk threefold, and their order is unchanged in 20
 Test ROC-AUC, mean (± standard deviation) over three labeled subsets. With every outcome known, the production model reaches 0.6639. The report also gives each method's change against labeled-only on the same subset.
 
 - **Labels matter far more than method.** Going from 1% to 20% labeled adds about 0.04 ROC-AUC.
-- **Label spreading is the only method that helps**, and mainly when labels are scarcest: +0.010 ROC-AUC at 1% labeled, positive on all three subsets (+0.005 to +0.015), and +0.002 at 20%. At 5% the change is within ±0.003. It also gives the lowest default rate among the safest 80% at every label share (20.37% against 20.72% at 1%).
+- **Label spreading is the only method whose average ROC-AUC beats labeled-only at every label share**, mostly when labels are scarcest (three labeled subsets, one 2016 cohort): +0.010 ROC-AUC at 1% labeled, positive on all three subsets (+0.005 to +0.015), and +0.002 at 20%. At 5% the change is within ±0.003. It also gives the lowest default rate among the safest 80% at every label share (20.37% against 20.72% at 1%).
 - **Self-training hurts.** Default probabilities rarely reach 0.9, so thresholded self-training adds almost only "repaid" pseudo-labels and skews the training data (−0.035 at 1%). Balancing the pseudo-labels to the base rate reduces the damage but does not remove it, and it hurts more as more pseudo-labels are added.
 - **Cluster-based methods are neutral to slightly negative** (between −0.005 and +0.002 on average).
 - **These results replace an earlier version** in which pseudo-labeled and duplicated rows could enter boosting's early-stopping set and the labeled rows' state encoding used their own outcomes. Under that setup self-training and cluster soft labels looked mildly helpful; with a clean early-stopping set they do not.
@@ -650,7 +650,7 @@ The model shows that loans which are large relative to income default more often
 
 **What the number means.** Under the assumption that the recorded fields capture everything that drives both loan size and default, a loan of at least 25% of income is associated with about 9 percentage points more default than a smaller loan for comparable borrowers. That is an observational estimate of a binary contrast. It is not the effect of a lending policy such as a loan-to-income cap, which would also change who borrows, how much they borrow and on what terms.
 
-**Common support is limited at high incomes.** The treatment is defined from income, and loans were capped at $35,000 until 2015, so no borrower earning over $140,000 in the training data (9,633 loans) is in the treated group. For them, the all-loans estimate relies on the outcome model extrapolating. Weighting balances every covariate to within 0.05 standardized differences except income (−0.17), for the same reason. The estimate is nevertheless stable when the target is restricted to where both groups exist:
+**Common support is limited at high incomes.** The treatment is defined from income, and loans were capped at $35,000 until 2015, so no borrower earning over $140,000 in the training data (9,633 loans) is in the treated group. For them, the all-loans estimate relies on the outcome model extrapolating. Inverse propensity weighting brings every covariate in the balance table to within 0.05 standardized differences except income (−0.17), for the same reason. The estimate is nevertheless stable when the target is restricted to where both groups exist:
 
 | Estimate | Population | Difference |
 |---|---|---:|
@@ -659,7 +659,7 @@ The model shows that loans which are large relative to income default more often
 | AIPW, propensity 0.1–0.9 (Crump et al., 2009) | the 92% of loans where both groups are common | +9.34 pp (8.87–9.80) |
 | Overlap weights (Li, Morgan & Zaslavsky, 2018) | loans weighted towards those that could have gone either way | +9.22 pp |
 
-Clipping at 0.05 changes nothing at two decimals because every propensity in the thin tail belongs to a control loan, whose weight is close to 1 either way. The effective sample size of the weights is 43,311 of 55,392 treated and 85,955 of 94,608 control loans.
+Clipping at 0.05 changes nothing at two decimals: below 0.05 there are 9,992 control loans and a single treated loan, and none above 0.95, so the clip mainly moves control weights that stay close to 1. The effective sample size of the clipped inverse propensity weights is 43,311 of 55,392 treated and 85,955 of 94,608 control loans. Overlap weights balance every covariate in the report's table to within 0.008 standardized differences, income included, with effective sample sizes of 51,470 treated and 70,282 control loans.
 
 - **Stability checks pass, but they test the estimator, not the assumption.** A shuffled placebo treatment gives −0.30 pp (CI includes 0); adding a random covariate gives +9.14 pp; a random half of the data gives +9.19 pp. None of these can detect a confounder the data does not record.
 - **Differences by credit score** are +10.9 pp below FICO 680, +8.9 pp for 680–719 and +6.5 pp at 720 and above. This is a lead for further study, not evidence of where a policy would work best.
@@ -669,16 +669,16 @@ Clipping at 0.05 changes nothing at two decimals because every propensity in the
 
 [hpo.py](src/loan_default/hpo.py) adds two techniques beyond the randomized search of section 9. With `--track`, every trial is logged to MLflow as a nested run under its study ([reports/hpo_report.md](reports/hpo_report.md)).
 
-**1. Bayesian optimization (Optuna TPE) against random sampling.** Both studies run in the same process with the same six hyperparameters and ranges as section 9, the same 5-fold CV, the same median pruner and 40 trials each; only the sampler differs. Each trial reports its running CV score after every fold, so the pruner can stop trials that fall behind.
+**1. Bayesian optimization (Optuna TPE) against random sampling.** Both studies run in the same process with the same six hyperparameters and ranges as section 9, the same 5-fold CV, the same median pruner and 40 trials each; only the sampler differs. Each trial reports its running CV score after every fold, and the pruner may stop a trial before its last fold. With the same seed, TPE's 10 random start-up trials are the same 10 configurations the random sampler tries first, so the two only diverge from trial 11.
 
-| Sampler | Completed | Pruned | Fold fits | Best after 10 | Best after 20 | Best after 40 | Median completed | Test ROC-AUC of winner |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| TPE | 34 | 6 | 200 | 0.6635 | 0.6636 | **0.6638** | 0.6635 | 0.6636 |
-| Random | 16 | 24 | 179 | 0.6635 | 0.6635 | 0.6636 | 0.6632 | **0.6640** |
+| Sampler | Completed | Pruned | Fold fits | Best after 10 | Best after 20 | Best after 40 | Test ROC-AUC of winner |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| TPE | 40 | 0 | 200 | 0.6635 | 0.6636 | **0.6638** | 0.6636 |
+| Random | 33 | 7 | 179 | 0.6635 | 0.6635 | 0.6636 | **0.6640** |
 
-- **TPE concentrates on the good region.** After its 10 random start-up trials it proposes settings that are rarely pruned (6 of 40, against 24 for random sampling), and its best CV score ends 0.0002 higher. Because fewer of its trials are pruned, it also trains more folds.
+- **TPE stays in the good region.** None of its trials falls far enough behind to be pruned, against 7 of the random sampler's (each stopped after 2 folds), and its best CV score ends 0.0002 higher. The median of completed trials (0.6635 against 0.6627) describes each run, but because pruning decides which trials complete, it does not isolate the quality of the sampler.
 - **The difference does not survive to 2016.** The random sampler's winner scores 0.6640 on test against TPE's 0.6636 and production's 0.6639. The response surface is flat around these settings, which agrees with section 9: tuning cannot add much here, so production keeps its parameters. This is one seed per sampler; a general ranking of the samplers would need several.
-- **What matters in the search space** (fANOVA importance over the TPE trials): L2 regularization (0.29), tree size (0.21) and the number of iterations (0.18), well above the learning rate (0.03).
+- **What matters in the search space** (fANOVA importance over the 40 TPE trials): tree size (0.36) and the number of iterations (0.26) ahead of the feature fraction (0.17), minimum leaf size (0.10), L2 regularization (0.06) and the learning rate (0.05). With 40 trials concentrated by TPE, this ranking is itself uncertain.
 
 **2. AutoML as a CASH problem** (combined algorithm selection and hyperparameter optimization). One TPE study chooses the model family *and* its settings: gradient boosting, random forest, extra trees, logistic regression or the entity-embedding network. To fit the budget it ran 40 trials on a 50,000-loan sample with 3-fold CV.
 
@@ -690,7 +690,7 @@ Clipping at 0.05 changes nothing at two decimals because every propensity in the
 | Random forest | 4 | 0.6525 |
 | Extra trees | 4 | 0.6523 |
 
-TPE spent most of its budget on the strongest families. Refitted on all 150,000 loans, the winning embedding network scores 0.6625 on 2016, below production's 0.6639. Only the winner was refitted, and production's settings come from a separate full-sample search, so this does not show *why* the order changed (sample size is one possible reason). A sounder AutoML protocol would keep the best few candidates per family and validate them all at the full training size before choosing.
+TPE spent most of its budget on the strongest families. Refitted on all 150,000 loans, the winning embedding network scores 0.6625 on 2016, below production's 0.6639 (default rate among the safest 80%: 19.41% against 19.48%). Only the winner was refitted, and production's settings come from a separate full-sample search, so this does not show *why* the order changed (sample size is one possible reason). A sounder AutoML protocol would keep the best few candidates per family and validate them all at the full training size before choosing.
 
 ### 12.7 Explainability
 
@@ -732,7 +732,7 @@ Residential geography can act as a proxy for race or ethnicity. Historical redli
 
 We remove ZIP code to reduce dependence on detailed residential location when assessing individual borrowers.
 
-ZIP code would also not have helped accuracy. Embedding it lowers test ROC-AUC by up to 0.003 (section 12.2).
+In the two embedding models tested, adding ZIP code lowered test ROC-AUC by 0.001–0.002 (section 12.2), so excluding it showed no accuracy cost there.
 
 Race and ethnicity labels are unavailable, so racial approval and error disparities cannot be measured directly. ZIP-code exclusion addresses one feature choice; it does not establish fair model outcomes.
 
@@ -766,10 +766,10 @@ Race and ethnicity labels are unavailable, so racial approval and error disparit
 | Policy | Approved | Default rate, approved | Equal-opportunity gap | Lowest impact ratio |
 |---|---:|---:|---:|---:|
 | Single cutoff (production) | 80.0% | 19.5% | 17.0 pp | 0.78 |
-| Single cutoff, same approval volume as per band | 78.8% | 19.3% | 18.1 pp | 0.77 |
+| Same approval volume, ranked within 2016 | 78.8% | 19.3% | 18.1 pp | 0.77 |
 | Cutoff per income band | 78.8% | 19.4% | 3.2 pp | 0.96 |
 
-The cutoffs move from 0.188 for the top band to 0.281 for the bottom band. Per-band cutoffs approve fewer loans (78.8%), so the fair comparison is a single cutoff at the same volume: it reaches 19.3% default among approved loans, against 19.4% with per-band cutoffs. At equal volume, closing most of the equal-opportunity gap costs about 0.1 points of default rate here. This is a single cohort without intervals, so the size of that cost is indicative.
+The cutoffs move from 0.188 for the top band to 0.281 for the bottom band. Per-band cutoffs approve fewer loans (78.8%), so the fairer comparison approves the same number of 2016 loans by ranking their scores (a benchmark, not a cutoff that could be fixed in advance): it reaches 19.3% default among approved loans, against 19.4% with per-band cutoffs, while the equal-opportunity gap falls from 18.1 to 3.2 points. In this sample the difference in default rate is about 0.1 points; with one cohort and no intervals, that is not an established cost. Per-band cutoffs chosen by quantile also equalize approval among repaid borrowers only approximately.
 
 Cutoffs that differ by group raise legal questions under fair-lending law, above all when the groups are defined by a protected characteristic. This mitigation therefore measures a trade-off; it is not a policy to deploy without legal review. Alternatives that do not set different cutoffs by group include adding information that explains repayment for applicants with thin files, and a second review for declined applicants near the cutoff.
 
@@ -781,7 +781,7 @@ Cutoffs that differ by group raise legal questions under fair-lending law, above
 - **Approval-based evaluation:** matched approval rates connected ranking performance to a lending decision.
 - **Later-cohort ranking:** test ROC-AUC remained close to CV performance.
 - **Missingness handling:** the pipeline retained employment-information missingness identified in EDA. Section 12.1 confirms that the missing flag matters more than any imputation method.
-- **Entity embeddings as boosting inputs:** the best single model (+0.0008 test ROC-AUC), with interpretable state vectors.
+- **Entity embeddings:** interpretable state vectors, and a small ROC-AUC gain as boosting inputs (+0.0007 test) that is not yet established.
 - **Causal estimate with refutations:** the effect of a large loan relative to income is stable across four estimators, both periods and three refutation tests.
 - **Fairness audit:** it found two groups below the 0.8 screening threshold and group-specific calibration gaps, neither visible in overall metrics.
 
@@ -798,7 +798,7 @@ Cutoffs that differ by group raise legal questions under fair-lending law, above
 | PCA components as model inputs | −0.0016 test ROC-AUC | Rotations break the axis-aligned splits trees rely on |
 | Cluster distances as features | +0.0001 | Boosting already finds these interactions |
 | Semi-supervised methods | Label spreading +0.010 with 1% of labels, +0.002 with 20%; self-training −0.017 to −0.035 | Outcomes are worth more than unlabeled loans; confidence-based pseudo-labels skew an imbalanced target |
-| ZIP-code embeddings | −0.003 test ROC-AUC | Sparse categories overfit in these models; excluding ZIP showed no accuracy cost |
+| ZIP-code embeddings | −0.001 to −0.002 test ROC-AUC | Sparse categories overfit in these models; excluding ZIP showed no accuracy cost |
 | Removing state | −0.0026 test ROC-AUC; regional gap 3.1 → 1.9 points; income and housing gaps unchanged | A weak proxy; removing it does not address the main disparities |
 
 The description-availability flag was removed because descriptions became almost absent in later years. Income percentile clipping and FICO bands were not included in the final pipeline.
@@ -819,7 +819,7 @@ The description-availability flag was removed because descriptions became almost
 | Probabilities underestimate 2016 defaults | Scores understate later-cohort risk | Assess recalibration on recent labelled data |
 | Protected-group labels are absent | Direct racial disparity assessment is unavailable; the audit uses correlated groups (section 13) | Obtain an appropriate subgroup evaluation dataset, or BISG proxies under compliance supervision |
 | Gradient boosting stops early on a validation split of the already-preprocessed training data | Outer CV folds and the 2016 test are unaffected, but the state encoding seen by that internal split was fitted with labels from the other rows | Fix the number of iterations from development runs, or split the early-stopping set before preprocessing |
-| Interest rate, grade and term are not recorded | The causal estimate (section 12.5) includes the effect of the terms that come with a large loan | Add these fields, or test a loan-to-income cap on a random sample |
+| Interest rate, grade and term are not recorded | They may be consequences of loan size, signals of what the lender knew, or both, so the causal estimate (section 12.5) cannot say which paths it includes | Add these fields, or test a specific loan-to-income limit on a random sample |
 | Semi-supervised results hide labels at random | Real unlabeled applicants (rejections) differ systematically from approved ones, so the results do not carry over to reject inference | Obtain outcomes for a random sample of otherwise-rejected applicants |
 | Financial returns and losses are absent | Default reductions cannot be translated directly into profit | Add costs, exposure and recovery information |
 
@@ -882,7 +882,7 @@ cd notebooks
 jupyter notebook
 ```
 
-Scikit-learn 1.4 or later is required for the gradient boosting parameter search in notebook 05.
+Scikit-learn 1.7 or later is required (`pyproject.toml`); the semi-supervised experiment uses the external validation set that `HistGradientBoostingClassifier` gained in 1.7.
 
 ### Execution
 
@@ -941,7 +941,7 @@ python -m loan_default.registry export --out-dir served
 docker run --rm -p 8000:8000 --read-only -v "$PWD/served:/app/models:ro" loan-default
 ```
 
-The exported metadata records the registered name, version and alias, so `/metadata` shows which version is live. `export` resolves the alias once and takes the model and the metadata from that same version, writing each file under a temporary name before moving it into place. A running service caches the model, so restart it after an export.
+The exported metadata records the registered name, version and alias, so `/metadata` shows which version is live. `export` resolves the alias once and writes that version's model and metadata into a new release directory, `served/releases/v<version>-<id>/`, which is never modified afterwards; it then switches the link `served/current` to it in one atomic rename. The service resolves `current` once at start-up and loads both files from the same release, so it can never pair one version's model with another's cutoff, even if an export is interrupted. Earlier releases stay in place for rollback. A running service caches its release, so restart it after an export.
 
 ### Serve predictions
 
@@ -978,7 +978,7 @@ python -m loan_default.drift --current logs/predictions.jsonl                   
 python -m loan_default.monitor --log logs/predictions.jsonl --outcomes outcomes.csv     # predicted against actual, by month
 ```
 
-The drift check needs no outcomes but, as the 2016 replay shows, can miss a model going wrong. Besides PSI it reads the change in each field's share of missing values (5 points is a moderate shift, 20 points a large one), and a field whose PSI cannot be computed, for example because every current value is missing, is marked invalid and fails the check. The outcome check catches calibration errors once outcomes arrive. It requires each application id to appear once in the outcomes, counts an application scored more than once at its latest score, and reports how many logged applications it could match. Both fail with exit status 1 when they find a problem; the outcome check exits with 2 when no prediction matched an outcome, so an empty join never passes. [drift.yml](.github/workflows/drift.yml) runs them weekly, and runs the outcome check even when the input check has already failed.
+The drift check needs no outcomes but, as the 2016 replay shows, can miss a model going wrong. Besides PSI it reads the change in each field's share of missing values (5 points is a moderate shift, 20 points a large one), and a field whose PSI cannot be computed, for example because every current value is missing, is marked invalid and fails the check. The outcome check catches calibration errors once outcomes arrive. It requires each application id to appear once in the outcomes with a 0 or 1 result, leaves out log rows without a readable time or a valid score, counts an application scored more than once at its first valid score (the one in force at the decision), and reports how many applications were logged, valid, matched and checked. Both fail with exit status 1 when they find a problem; the outcome check exits with 2 when nothing could be checked, so an empty or unusable join never passes. [drift.yml](.github/workflows/drift.yml) runs them weekly, and runs the outcome check even when the input check has already failed.
 
 **Docker**
 
@@ -1065,7 +1065,7 @@ Scored with the ML Test Score rubric ([Breck et al., 2017](https://research.goog
 | The served model is not too stale | 0.5 | A weekly drift job is in place; there is no live prediction log for it to read yet |
 | Outputs are numerically valid | 1 | The service rejects any score outside 0–1, with a test |
 | Serving speed and memory hold steady | 1 | CI fails on p95 latency above 0.2 s or memory above 600 MiB |
-| Prediction quality holds | 0.5 | `loan_default.monitor` joins each application id once, fails on a monthly gap above 2 points and on no matched outcomes; CI runs it on the 2016 replay, and there are no live outcomes yet |
+| Prediction quality holds | 0.5 | `loan_default.monitor` joins each application id once, fails on a monthly gap above 2 points and when nothing could be checked; CI applies the same functions to the 2016 replay (not the full command-line path), and there are no live outcomes yet |
 
 **Overall: 4**, up from 2. Features and data set it. The half points mark checks that are computed but not enforced; turning them into gates (minimum importance, slice ROC-AUC, approval-policy default rate, and a promotion cohort separate from the 2016 benchmark) is the next step. The remaining zeros need things this project does not have: live outcomes, protected-group labels, a deployment to canary, and private data to protect.
 
@@ -1082,7 +1082,7 @@ Scored with the ML Test Score rubric ([Breck et al., 2017](https://research.goog
 
 Application-time features improve risk ranking beyond FICO alone.
 
-At **80% approval**, tuned gradient boosting retained 40,000 test loans with a **19.50%** default rate, compared with **21.56%** for FICO. This represents **827 fewer defaulted loans** at the same approval volume.
+At **80% approval**, tuned gradient boosting retained 40,000 test loans with a **19.48%** default rate, compared with **21.57%** for FICO. This represents **836 fewer defaulted loans** at the same approval volume (notebook 05: 19.50%, 21.56%, 827).
 
 The main remaining issue is calibration: ranking transferred to 2016, but probabilities underestimated its higher default level. The inputs were stable; loans of the same predicted risk defaulted more often. Chronological validation shows the underestimation building from 2014, a trend that shuffled CV hid. Recalibrating on recent loans removes about half of the gap, and the rest remains because the level kept rising. Tuning on year-ordered folds did not change this. Replaying 2016 as if the model were live, input monitoring stays green all year; only a check against outcomes catches the error, and only as fast as outcomes arrive. Further work should confirm these findings on a later cohort.
 

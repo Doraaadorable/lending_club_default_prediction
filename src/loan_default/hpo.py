@@ -75,7 +75,7 @@ def cv_objective(
             fitted = clone(model).fit(X.iloc[fit_idx], y.iloc[fit_idx])
             scores.append(roc_auc_score(y.iloc[held_idx], fitted.predict_proba(X.iloc[held_idx])[:, 1]))
             trial.report(float(np.mean(scores)), step)
-            if prune and trial.should_prune():
+            if prune and step < len(splits) - 1 and trial.should_prune():  # a finished trial is never pruned
                 raise optuna.TrialPruned()
         return float(np.mean(scores))
 
@@ -206,9 +206,12 @@ def render_report(
         "the same median pruner)",
         "",
         "Both studies use the same search space, objective, folds and pruner in the same run; only the sampler "
-        "differs. TPE's first 10 trials are random start-up trials, so differences before trial 10 are luck. "
+        "differs. TPE's first 10 trials are random start-up trials; with the same seed they are the same 10 "
+        "configurations as the random sampler's, so the samplers only differ from trial 11. A trial is pruned only "
+        "before its last fold. "
         "Fold fits count the CV folds actually trained, since pruned trials stop early. One seed per sampler: "
-        "the comparison shows behaviour on this problem, not a general ranking.",
+        "the comparison shows behaviour on this problem, not a general ranking. The median of completed trials "
+        "describes each run; because pruning decides which trials complete, it does not isolate sampler quality.",
         "",
         *sampler_rows(samplers),
     ]

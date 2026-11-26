@@ -74,3 +74,17 @@ def test_boosting_params_strip_the_family_prefix() -> None:
         "l2_regularization",
         "max_features",
     }
+
+
+def test_a_trial_is_never_pruned_after_its_last_fold(small_train: tuple[pd.DataFrame, pd.Series]) -> None:
+    X, y = small_train
+
+    def tiny(trial: optuna.trial.BaseTrial) -> Pipeline:
+        return build_model({"max_iter": trial.suggest_int("max_iter", 5, 40)}, 0)
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    pruner = optuna.pruners.ThresholdPruner(lower=0.99)  # would prune every trial at every chance
+    study = optuna.create_study(direction="maximize", pruner=pruner)
+    study.optimize(cv_objective(tiny, X, y, folds=3, prune=True), n_trials=2)
+    for trial in study.trials:
+        assert len(trial.intermediate_values) < 3  # stopped before the last fold, not after it

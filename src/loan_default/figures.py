@@ -4,8 +4,9 @@
 
 1. Default rate among approved 2016 loans against the share approved, for the production model
    and for FICO alone: the decision the model is for.
-2. Mean predicted against actual default rate per month of 2016, from the replay
-   (`reports/replay_monthly.csv`, written by `python -m loan_default.replay`): the calibration gap.
+2. Mean predicted against actual default rate per month of 2016, from the replay: the calibration gap.
+   It reads `<out-dir>/replay_monthly.csv`, so run `python -m loan_default.replay --out-dir <out-dir>`
+   first when drawing into a new directory.
 """
 
 import argparse
@@ -87,7 +88,9 @@ def plot_approval(model: pd.DataFrame, fico: pd.DataFrame, path: Path) -> None:
     )
     ax.set_xlabel("Share of 2016 applicants approved (safest first, %)", color=TEXT, fontsize=9)
     ax.set_ylabel("Default rate among approved (%)", color=TEXT, fontsize=9)
-    ax.set_title("Lower default rate at every approval rate", loc="left", color=TEXT, fontsize=11)
+    ax.set_title(
+        "Gradient boosting lowers default rates at matched approval volumes", loc="left", color=TEXT, fontsize=11
+    )
     _axes_style(ax)
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)

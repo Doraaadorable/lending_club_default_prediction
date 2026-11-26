@@ -198,11 +198,15 @@ class EntityEmbeddingNet(ClassifierMixin, TransformerMixin, BaseEstimator):  # t
         """Learn embeddings and weights with Adam, stopping when held-out log loss stops improving."""
         rng = np.random.default_rng(self.seed)
         target = np.asarray(y, dtype=float)
-        numeric, codes = self._numeric_matrix(X, fit=True), self._codes(X, fit=True)
         self.classes_ = np.array([0, 1])
         order = rng.permutation(len(target))
         n_valid = max(1, len(target) // 10)
         valid, train = order[:n_valid], order[n_valid:]
+        # vocabulary, medians and scales come from the training part only, so early stopping judges unseen rows
+        fit_rows = X.iloc[np.sort(train)]
+        self._numeric_matrix(fit_rows, fit=True)
+        self._codes(fit_rows, fit=True)
+        numeric, codes = self._numeric_matrix(X, fit=False), self._codes(X, fit=False)
 
         params = self._init_params(numeric.shape[1], rng)
         # start the output at the base rate so early updates go to the features, not the intercept

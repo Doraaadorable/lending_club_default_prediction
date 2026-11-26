@@ -26,7 +26,7 @@ Model metrics are only useful if they move a business metric, so the two are tra
 | Level | Metric | Target / guardrail | Where measured |
 |---|---|---|---|
 | Business | Default rate among approved loans at a fixed approval rate | Below the FICO-only screen at the same rate (19.5% vs 21.6% at 80% on 2016) | `train.py` metadata, README section 10 |
-| Business | Defaults avoided at the same volume | 827 fewer defaults per 40,000 approvals vs FICO | README section 10 |
+| Business | Defaults avoided at the same volume | 836 fewer defaults per 40,000 approvals vs FICO (current package; notebook 05: 827) | README section 1 |
 | Model | ROC-AUC, average precision | Training stops unless test ROC-AUC beats the FICO baseline; AP is reported, not gated | `train.py` |
 | Model | Calibration gap (mean predicted minus actual) | Within 2 points per month, or the monitor alerts | `monitor.py` |
 | Fairness | Adverse impact ratio by group | Ratios below 0.8 (a screening threshold, not a legal test) trigger a review | `fairness.py` |

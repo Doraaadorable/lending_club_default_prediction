@@ -68,7 +68,7 @@ jobs:
         run: python -m loan_default.replay --out-dir analysis --log-dir "$RUNNER_TEMP/replay"
       - name: Fairness audit of the approval policy
         run: python -m loan_default.fairness --out-dir analysis
-      - name: SHAP explanations and reason codes
+      - name: SHAP explanations and per-applicant contributions
         run: python -m loan_default.explain --out-dir analysis
       - name: Add the reports to the run summary
         run: |
