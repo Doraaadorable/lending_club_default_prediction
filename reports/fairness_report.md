@@ -69,7 +69,7 @@ Cutoffs per band (chosen on 2007-2015 out-of-fold scores): $120k and over 0.188,
 | Policy | Approved | Default rate, approved | Equal opportunity gap | Lowest impact ratio |
 |---|---:|---:|---:|---:|
 | single cutoff (production) | 80.0% | 19.5% | 17.0 pp | 0.78 |
-| single cutoff, same approval volume as per band | 78.8% | 19.3% | 18.1 pp | 0.77 |
+| same approval volume, ranked within 2016 (not a cutoff fixed in advance) | 78.8% | 19.3% | 18.1 pp | 0.77 |
 | cutoff per income band | 78.8% | 19.4% | 3.2 pp | 0.96 |
 
 After per-band cutoffs:

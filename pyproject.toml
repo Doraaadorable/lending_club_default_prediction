@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "pandas",
-    "scikit-learn>=1.4",
+    "scikit-learn>=1.7",  # 1.7 added external validation sets for HistGradientBoosting (semi_supervised)
     "scipy",
     "pydantic>=2",
     "joblib",

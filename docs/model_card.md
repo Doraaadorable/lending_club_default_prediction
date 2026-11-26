@@ -49,7 +49,7 @@ The training set is 150,000 loans issued from 2007 to 2015 (default rate 18.5%),
 | Default rate, safest 80% | 19.5% | 21.6% |
 | Mean predicted against actual default | 18.5% vs 23.3% | |
 
-At the same volume of 40,000 approvals, the model approves 827 fewer loans that later defaulted (notebook 05; the current package run gives 836, from library-version differences, README section 16). The fairness audit by group is in [reports/fairness_report.md](../reports/fairness_report.md) and README section 13.
+At the same volume of 40,000 approvals, the model approves 836 fewer loans that later defaulted (current package; notebook 05 reported 827, the difference coming from library versions, README section 16). The fairness audit by group is in [reports/fairness_report.md](../reports/fairness_report.md) and README section 13.
 
 ## Explanations
 

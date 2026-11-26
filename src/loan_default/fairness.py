@@ -250,7 +250,7 @@ def run(splits: Splits, out_dir: Path) -> str:
     policies = [
         ("single cutoff (production)", single, before),
         (
-            "single cutoff, same approval volume as per band",
+            "same approval volume, ranked within 2016 (not a cutoff fixed in advance)",
             same_volume,
             group_metrics(test_groups, y_test, test["production"], same_volume),
         ),

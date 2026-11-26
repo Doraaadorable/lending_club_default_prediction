@@ -52,7 +52,13 @@ def numeric_psi(reference: pd.Series, current: pd.Series, bins: int = 10) -> flo
     """PSI for a numeric feature, using bins that each hold an equal share of the reference data."""
     ref, cur = reference.dropna().to_numpy(dtype=float), current.dropna().to_numpy(dtype=float)
     edges = np.unique(np.quantile(ref, np.linspace(0, 1, bins + 1)))
-    edges[0], edges[-1] = -np.inf, np.inf
+    if len(edges) < 3:
+        # one or two distinct reference values: equal-share bins collapse, so bin below, at and above each value
+        values = np.unique(ref)
+        edges = np.unique(np.concatenate([values, np.nextafter(values, np.inf)]))
+        edges = np.concatenate([[-np.inf], edges, [np.inf]])
+    else:
+        edges[0], edges[-1] = -np.inf, np.inf
     return psi_from_shares(np.histogram(ref, edges)[0] / len(ref), np.histogram(cur, edges)[0] / len(cur))
 
 
@@ -84,9 +90,10 @@ def psi_label(psi: float) -> str:
 
 def missing_label(change: float) -> str:
     """Reading for an absolute change in the share of missing values."""
-    if abs(change) >= MISSING_LARGE:
+    change = round(abs(change), 9)  # so that a change of exactly 5 points is not lost to floating point
+    if change >= MISSING_LARGE:
         return "large"
-    if abs(change) >= MISSING_MODERATE:
+    if change >= MISSING_MODERATE:
         return "moderate"
     return "stable"
 
@@ -106,7 +113,10 @@ def feature_drift(reference: pd.DataFrame, current: pd.DataFrame) -> pd.DataFram
         rows.append({"feature": name, "test": "KS", "p_value": p_value, "psi": psi})
     for name in CATEGORICAL_FEATURES:
         counts = pd.concat([ref[name].value_counts(), cur[name].value_counts()], axis=1).fillna(0)
-        p_value = float(chi2_contingency(counts)[1])
+        try:
+            p_value = float(chi2_contingency(counts)[1])
+        except ValueError:  # e.g. every current value missing: no table to test, the reading still applies
+            p_value = float("nan")
         psi = categorical_psi(ref[name], cur[name])
         rows.append({"feature": name, "test": "chi-squared", "p_value": p_value, "psi": psi})
     report = pd.DataFrame(rows)

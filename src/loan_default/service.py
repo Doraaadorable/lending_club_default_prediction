@@ -53,6 +53,16 @@ def model_dir() -> Path:
     return Path(os.environ.get("MODEL_DIR", "models"))
 
 
+def release_dir(directory: Path) -> Path:
+    """The directory holding the model and metadata to serve.
+
+    A directory written by `registry export` has a `current` link to one release; it is resolved once,
+    so both files come from the same release. A directory written by `train` holds the files directly.
+    """
+    current = directory / "current"
+    return current.resolve(strict=True) if current.exists() else directory
+
+
 @lru_cache(maxsize=1)
 def artifacts() -> tuple[Pipeline, dict[str, Any]]:
     """Load the fitted pipeline and its metadata once per process.
@@ -60,7 +70,7 @@ def artifacts() -> tuple[Pipeline, dict[str, Any]]:
     The metadata gains `model_sha256`, a hash of the model file, so logged predictions
     can be traced to the exact model that made them.
     """
-    directory = model_dir()
+    directory = release_dir(model_dir())
     model: Pipeline = joblib.load(directory / "model.joblib")
     metadata: dict[str, Any] = json.loads((directory / "metadata.json").read_text())
     metadata["model_sha256"] = hashlib.sha256((directory / "model.joblib").read_bytes()).hexdigest()

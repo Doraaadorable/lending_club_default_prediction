@@ -21,11 +21,11 @@ Treatment is defined from income, so at high incomes a large loan is rare or imp
 
 | Income | Loans 2007-2015 | Treated | Share | Loans 2016 | Treated | Share |
 |---|---:|---:|---:|---:|---:|---:|
-| $0k-40k | 28,538 | 15,659 | 54.9% | 8,053 | 3,983 | 49.5% |
-| $40k-75k | 67,816 | 27,800 | 41.0% | 21,825 | 7,883 | 36.1% |
-| $75k-120k | 35,996 | 10,572 | 29.4% | 13,116 | 3,649 | 27.8% |
-| $120k-140k | 8,017 | 1,361 | 17.0% | 3,082 | 558 | 18.1% |
-| $140k and over | 9,633 | 0 | 0.0% | 3,924 | 46 | 1.2% |
+| $0k-40k | 24,435 | 13,489 | 55.2% | 6,850 | 3,414 | 49.8% |
+| $40k-75k | 68,125 | 28,649 | 42.1% | 21,702 | 8,031 | 37.0% |
+| $75k-120k | 39,790 | 11,893 | 29.9% | 14,442 | 4,070 | 28.2% |
+| $120k-140k | 7,140 | 1,225 | 17.2% | 2,720 | 507 | 18.6% |
+| $140k and over | 10,510 | 136 | 1.3% | 4,286 | 97 | 2.3% |
 
 ## Propensity overlap (as predicted, before clipping)
 
@@ -34,23 +34,28 @@ Treatment is defined from income, so at high incomes a large loan is rare or imp
 | treated | 0.124 | 0.484 | 0.757 |
 | control | 0.000 | 0.309 | 0.677 |
 
-6.7% of loans have a propensity outside 0.05-0.95 and 6.4% are clipped at [0.01, 0.99]. Largest weight 21. Effective sample size of the weights: 43,311 of 55,392 treated, 85,955 of 94,608 control loans.
+6.7% of loans have a propensity outside 0.05-0.95 and 6.4% are clipped at [0.01, 0.99]. Largest weight 21. Effective sample size of the clipped inverse propensity weights: 43,311 of 55,392 treated, 85,955 of 94,608 control loans; of the overlap weights: 51,470 treated, 70,282 control.
+
+| Propensity | Treated loans | Control loans |
+|---|---:|---:|
+| below 0.05 | 1 | 9,992 |
+| above 0.95 | 0 | 0 |
 
 ## Covariate balance
 
-Standardized mean difference between treated and control loans; below 0.1 is usually read as balanced. Income stays imbalanced after weighting, as the support table explains.
+Standardized mean difference between treated and control loans, for the covariates listed; below 0.1 is usually read as balanced. Income stays imbalanced after inverse propensity weighting, as the support table explains.
 
-| Covariate | Before weighting | After weighting |
-|---|---:|---:|
-| fico_n | +0.005 | -0.016 |
-| dti_n | +0.453 | +0.049 |
-| emp_length | +0.016 | +0.003 |
-| log_income | -0.634 | -0.168 |
-| issue_year | +0.072 | +0.008 |
-| purpose = debt_consolidation | +0.188 | +0.020 |
-| purpose = credit_card | +0.040 | -0.002 |
-| home_ownership_n = RENT | +0.016 | +0.017 |
-| home_ownership_n = MORTGAGE | -0.070 | -0.023 |
+| Covariate | Before weighting | Inverse propensity weights | Overlap weights |
+|---|---:|---:|---:|
+| fico_n | +0.005 | -0.016 | +0.004 |
+| dti_n | +0.453 | +0.049 | +0.003 |
+| emp_length | +0.016 | +0.003 | +0.004 |
+| log_income | -0.634 | -0.168 | -0.006 |
+| issue_year | +0.072 | +0.008 | -0.000 |
+| purpose = debt_consolidation | +0.188 | +0.020 | +0.006 |
+| purpose = credit_card | +0.040 | -0.002 | +0.003 |
+| home_ownership_n = RENT | +0.016 | +0.017 | -0.008 |
+| home_ownership_n = MORTGAGE | -0.070 | -0.023 | +0.003 |
 
 ## Sensitivity to clipping, trimming and weighting (2007-2015)
 
@@ -60,7 +65,7 @@ Each row answers a slightly different question: the trimmed and overlap-weighted
 |---|---|---:|---:|---|
 | AIPW, propensities clipped to [0.01, 0.99] | all loans | 150,000 | +9.12 pp | +8.68 to +9.56 pp |
 | AIPW, propensities clipped to [0.05, 0.95] | all loans | 150,000 | +9.12 pp | +8.68 to +9.56 pp |
-| AIPW, loans with propensity 0.1-0.9 | 92% of loans, where both groups are common | 137,393 | +9.34 pp | +8.87 to +9.80 pp |
+| AIPW, loans with propensity 0.1-0.9 (interval approximate: treats the trimmed set as fixed) | 92% of loans, where both groups are common | 137,393 | +9.34 pp | +8.87 to +9.80 pp |
 | overlap weights (Li, Morgan & Zaslavsky 2018) | loans weighted towards those that could have gone either way | 150,000 | +9.22 pp | n/a |
 
 ## Stability checks (AIPW)

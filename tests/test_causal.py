@@ -88,3 +88,11 @@ def test_sensitivity_reports_each_estimate_with_its_population() -> None:
     assert len(table) == 4
     assert table["n"].iloc[2] <= len(y)  # trimming keeps only the overlap region
     assert table["ate"].between(0, 0.3).all()
+
+
+def test_overlap_weights_give_each_group_the_other_groups_propensity() -> None:
+    from loan_default.causal import overlap_weights
+
+    t = np.array([1, 0])
+    e = np.array([0.8, 0.3])
+    assert overlap_weights(t, e).tolist() == pytest.approx([0.2, 0.3])

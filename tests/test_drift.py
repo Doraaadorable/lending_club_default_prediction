@@ -144,3 +144,29 @@ def test_a_rise_in_missing_values_alone_is_a_shift() -> None:
     current = X.sample(1000, random_state=1).copy()
     current.iloc[:300, current.columns.get_loc("emp_length")] = "NI"  # about 30% missing instead of 5%
     assert feature_drift(reference, current).set_index("feature").loc["emp_length", "reading"] == "large"
+
+
+def test_a_constant_reference_still_detects_a_shift() -> None:
+    from loan_default.drift import numeric_psi, psi_label
+
+    reference, current = pd.Series(np.zeros(500)), pd.Series(np.full(200, 90.0))
+    assert psi_label(numeric_psi(reference, current)) == "large"
+    assert numeric_psi(reference, pd.Series(np.zeros(200))) == pytest.approx(0.0)
+
+
+def test_a_change_of_exactly_five_points_in_missing_share_is_moderate() -> None:
+    from loan_default.drift import missing_label
+
+    assert missing_label(0.15 - 0.10) == "moderate"
+    assert missing_label(0.049) == "stable"
+
+
+def test_a_categorical_field_that_goes_entirely_missing_is_flagged() -> None:
+    from loan_default.drift import drifted_features, feature_drift
+    from loan_default.preprocessing import load_split
+
+    X, _ = load_split(Path(__file__).resolve().parents[1] / "data" / "train.csv")
+    reference = X.sample(3000, random_state=0)
+    current = X.sample(500, random_state=1).assign(purpose=np.nan)
+    table = feature_drift(reference, current)
+    assert "purpose" in drifted_features(table, "large")

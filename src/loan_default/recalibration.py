@@ -10,8 +10,11 @@ Three corrections are compared, from least to most flexible:
     Platt scaling     a constant and a slope on the log-odds scale
     isotonic          any monotonic mapping
 
-All three keep the ordering of loans (isotonic can only create ties), so ranking metrics
-and the approve-the-safest-share policy are unaffected; only the probabilities change.
+The intercept shift and Platt scaling (with a positive slope) are strictly increasing, so they
+keep the ranking and a policy that approves a fixed share of loans approves the same loans.
+Isotonic regression is only non-decreasing: it creates ties, which can lower ROC-AUC and change
+which loans fall in a fixed share. A policy with a fixed probability cutoff approves different
+loans after any of the three unless the cutoff is transformed with the probabilities.
 
 This is an exploratory check on the test period, not a deployment recipe: in practice the
 outcomes of loans issued in the first half of a year are not known by its second half.

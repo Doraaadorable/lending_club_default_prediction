@@ -172,9 +172,19 @@ def standardized_difference(values: Array, t: NDArray[np.int64], weights: Array 
     return float((mean1 - mean0) / np.sqrt((var1 + var0) / 2 + 1e-12))
 
 
-def balance_table(W: pd.DataFrame, t: NDArray[np.int64], propensity: Array) -> pd.DataFrame:
-    """Standardized mean differences before and after inverse propensity weighting."""
+def overlap_weights(t: NDArray[np.int64], propensity: Array) -> Array:
+    """Overlap weights: 1 - e for treated loans, e for control loans (Li, Morgan & Zaslavsky 2018)."""
+    out: Array = t * (1 - propensity) + (1 - t) * propensity
+    return out
+
+
+def balance_table(
+    W: pd.DataFrame, t: NDArray[np.int64], propensity: Array, raw_propensity: Array | None = None
+) -> pd.DataFrame:
+    """Standardized mean differences before weighting, after inverse propensity weighting and, with
+    `raw_propensity`, after overlap weighting."""
     weights = t / propensity + (1 - t) / (1 - propensity)
+    overlap = overlap_weights(t, raw_propensity) if raw_propensity is not None else None
     columns: dict[str, Array] = {c: W[c].fillna(W[c].median()).to_numpy(dtype=float) for c in NUMERIC_CONFOUNDERS}
     for column, level in [
         ("purpose", "debt_consolidation"),
@@ -189,6 +199,7 @@ def balance_table(W: pd.DataFrame, t: NDArray[np.int64], propensity: Array) -> p
                 "covariate": name,
                 "smd_before": standardized_difference(values, t),
                 "smd_after": standardized_difference(values, t, weights),
+                "smd_overlap": standardized_difference(values, t, overlap) if overlap is not None else np.nan,
             }
             for name, values in columns.items()
         ]
@@ -255,6 +266,12 @@ def overlap_summary(t: NDArray[np.int64], propensity: Array) -> dict[str, float]
         "max_weight": float(np.max(weights)),
         "ess_treated": effective_sample_size(weights[t == 1]),
         "ess_control": effective_sample_size(weights[t == 0]),
+        "overlap_ess_treated": effective_sample_size(overlap_weights(t, propensity)[t == 1]),
+        "overlap_ess_control": effective_sample_size(overlap_weights(t, propensity)[t == 0]),
+        "treated_below_05": float(((propensity < 0.05) & (t == 1)).sum()),
+        "control_below_05": float(((propensity < 0.05) & (t == 0)).sum()),
+        "treated_above_95": float(((propensity > 0.95) & (t == 1)).sum()),
+        "control_above_95": float(((propensity > 0.95) & (t == 0)).sum()),
         "n_treated": float((t == 1).sum()),
         "n_control": float((t == 0).sum()),
     }
@@ -269,10 +286,10 @@ INCOME_BANDS = [(0, 40_000), (40_000, 75_000), (75_000, 120_000), (120_000, 140_
 
 def support_by_income(W: pd.DataFrame, t: NDArray[np.int64]) -> pd.DataFrame:
     """Loans and share treated per income band: where one group is (nearly) absent there is no comparison."""
-    income = np.exp(W["log_income"].to_numpy())
+    log_income = W["log_income"].to_numpy()  # compared on the log scale, as computed, so band edges are exact
     rows = []
     for low, high in INCOME_BANDS:
-        band = (income >= low) & (income < high)
+        band = (log_income >= (np.log(low) if low > 0 else -np.inf)) & (log_income < np.log(high))
         label = f"${low / 1000:.0f}k and over" if np.isinf(high) else f"${low / 1000:.0f}k-{high / 1000:.0f}k"
         rows.append(
             {"income": label, "n": int(band.sum()), "treated": int(t[band].sum()), "share": float(t[band].mean())}
@@ -299,7 +316,8 @@ def sensitivity(t: NDArray[np.int64], y: Array, n: Nuisance) -> pd.DataFrame:
     se = float(scores.std(ddof=1) / np.sqrt(inside.sum()))
     rows.append(
         {
-            "estimate": f"AIPW, loans with propensity {OVERLAP_REGION[0]}-{OVERLAP_REGION[1]}",
+            "estimate": f"AIPW, loans with propensity {OVERLAP_REGION[0]}-{OVERLAP_REGION[1]} "
+            "(interval approximate: treats the trimmed set as fixed)",
             "population": f"{inside.mean():.0%} of loans, where both groups are common",
             "n": int(inside.sum()),
             "ate": float(scores.mean()),
@@ -308,7 +326,8 @@ def sensitivity(t: NDArray[np.int64], y: Array, n: Nuisance) -> pd.DataFrame:
             "high": float(scores.mean() + 1.96 * se),
         }
     )
-    w1, w0 = t * (1 - n.propensity), (1 - t) * n.propensity
+    weights = overlap_weights(t, n.propensity)
+    w1, w0 = t * weights, (1 - t) * weights
     overlap = float((w1 * y).sum() / w1.sum() - (w0 * y).sum() / w0.sum())
     rows.append(
         {
@@ -393,17 +412,28 @@ def render_report(
         f"{overlap['share_outside_5_95']:.1%} of loans have a propensity outside 0.05-0.95 and "
         f"{overlap['share_clipped']:.1%} are clipped at [{CLIP}, {1 - CLIP}]. "
         f"Largest weight {overlap['max_weight']:.0f}. "
-        f"Effective sample size of the weights: {overlap['ess_treated']:,.0f} of {overlap['n_treated']:,.0f} treated, "
-        f"{overlap['ess_control']:,.0f} of {overlap['n_control']:,.0f} control loans.",
+        f"Effective sample size of the clipped inverse propensity weights: {overlap['ess_treated']:,.0f} of "
+        f"{overlap['n_treated']:,.0f} treated, {overlap['ess_control']:,.0f} of {overlap['n_control']:,.0f} control "
+        f"loans; of the overlap weights: {overlap['overlap_ess_treated']:,.0f} treated, "
+        f"{overlap['overlap_ess_control']:,.0f} control.",
+        "",
+        "| Propensity | Treated loans | Control loans |",
+        "|---|---:|---:|",
+        f"| below 0.05 | {overlap['treated_below_05']:,.0f} | {overlap['control_below_05']:,.0f} |",
+        f"| above 0.95 | {overlap['treated_above_95']:,.0f} | {overlap['control_above_95']:,.0f} |",
         "",
         "## Covariate balance",
         "",
-        "Standardized mean difference between treated and control loans; below 0.1 is usually read as balanced. "
-        "Income stays imbalanced after weighting, as the support table explains.",
+        "Standardized mean difference between treated and control loans, for the covariates listed; below 0.1 is "
+        "usually read as balanced. Income stays imbalanced after inverse propensity weighting, as the support table "
+        "explains.",
         "",
-        "| Covariate | Before weighting | After weighting |",
-        "|---|---:|---:|",
-        *[f"| {r.covariate} | {r.smd_before:+.3f} | {r.smd_after:+.3f} |" for r in balance.itertuples()],
+        "| Covariate | Before weighting | Inverse propensity weights | Overlap weights |",
+        "|---|---:|---:|---:|",
+        *[
+            f"| {r.covariate} | {r.smd_before:+.3f} | {r.smd_after:+.3f} | {r.smd_overlap:+.3f} |"
+            for r in balance.itertuples()
+        ],
         "",
         "## Sensitivity to clipping, trimming and weighting (2007-2015)",
         "",
@@ -454,7 +484,7 @@ def run(splits: Splits, out_dir: Path) -> str:
         "2007-2015": estimates(t, y, nuisance),
         "2016": estimates(t_test, y_test, cross_fit(W_test, t_test, y_test)),
     }
-    balance = balance_table(W, t, nuisance.clipped().propensity)
+    balance = balance_table(W, t, nuisance.clipped().propensity, nuisance.propensity)
     refuted = refutations(W, t, y)
     by_fico = effect_by_fico(W, t, y, nuisance)
     support = {"2007-2015": support_by_income(W, t), "2016": support_by_income(W_test, t_test)}
