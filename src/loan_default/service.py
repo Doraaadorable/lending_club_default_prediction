@@ -57,10 +57,19 @@ def release_dir(directory: Path) -> Path:
     """The directory holding the model and metadata to serve.
 
     A directory written by `registry export` has a `current` link to one release; it is resolved once,
-    so both files come from the same release. A directory written by `train` holds the files directly.
+    so both files come from the same release. A directory written by `train` has no `current` and holds
+    the files directly. A `current` link whose release is missing is an error, never a silent fallback
+    to whatever files happen to sit in the directory.
     """
     current = directory / "current"
-    return current.resolve(strict=True) if current.exists() else directory
+    if current.is_symlink() or current.exists():
+        try:
+            return current.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                f"{current} points to a release that does not exist: {os.readlink(current)}"
+            ) from error
+    return directory
 
 
 @lru_cache(maxsize=1)

@@ -6,6 +6,12 @@ Approving the lowest-risk 80% of 2016 loans with gradient boosting gives a 19.5%
 
 ![2016 by month: actual default rate above the mean predicted probability, by 4.79 points on average and by more than 2 points in every month from March](reports/figures/monthly_calibration.png)
 
+**Main findings**
+
+- **Better decisions at the same volume.** Approving the safest 80% of 2016 applicants, gradient boosting's approved loans default 2.1 points less often than FICO's (19.48% against 21.57%): 836 fewer defaulted loans out of 40,000.
+- **Ranking held, probabilities did not.** In a month-by-month replay of 2016 the model ranked risk as well as in development, but its probabilities ran 4.79 points low on average. No input field drifted enough to raise an alert; only outcome monitoring caught it.
+- **Large loans for the income stay riskier after adjustment.** Among comparable borrowers, loans of at least 25% of annual income default about 9 points more often (observational; section 12.5). An audit by group finds that applicants with low income or no stated employment length are approved far less often and have their risk understated most (section 13).
+
 Both figures are drawn by `python -m loan_default.figures` from the current package (the approval curve is in `reports/approval_curve.csv`; the monthly figure reads the replay's `reports/replay_monthly.csv`). Headline numbers in this README come from the current package; sections 7–10 report notebook 05, which differs slightly because of library versions (section 16).
 
 ```bash
@@ -537,7 +543,7 @@ These are exploratory comparisons: one development sample, one test cohort, one 
 | Technique | Module | Report | Headline |
 |---|---|---|---|
 | Advanced imputation | `imputation` | [imputation_report.md](reports/imputation_report.md) | Iterative imputation recovers hidden values best; for the model, the missing flag matters more than the fill value |
-| Entity embeddings | `embedding` | [embedding_report.md](reports/embedding_report.md) | Boosting on learned embeddings: +0.0007 test ROC-AUC; adding ZIP lowers ROC-AUC |
+| Entity embeddings | `embedding` | [embedding_report.md](reports/embedding_report.md) | Boosting on learned embeddings: +0.0007 test ROC-AUC; adding ZIP lowers ROC-AUC, while the approval metric moves the other way |
 | PCA and clustering | `unsupervised` | [unsupervised_report.md](reports/unsupervised_report.md) | Four readable borrower segments, default rates 9%–26%; no accuracy gain as features |
 | Semi-supervised learning | `semi_supervised` | [semi_supervised_report.md](reports/semi_supervised_report.md) | Label spreading helps when 1% of outcomes are known (+0.010 ROC-AUC); self-training hurts; labels matter far more than method |
 | Causal inference | `causal` | [causal_report.md](reports/causal_report.md) | After adjustment, loans of at least 25% of income default about 9 points more often; observational, under stated assumptions |
@@ -597,7 +603,7 @@ The iterative imputer recovers values best, but the application fields are only 
 
 - **A one-layer network nearly matches gradient boosting** in ranking (0.6638 against 0.6639) and has a lower default rate among the safest 80% (19.39% against 19.48%). Which model is "best" depends on the metric, and none of these differences is established.
 - **Embeddings as boosting inputs have the highest ROC-AUC** (+0.0007 test, +0.0009 CV), a small difference from one seed. There is also a design caveat: the network learns the embeddings from the same training rows that the boosting model then trains on, so rare categories can carry some of their own outcomes into the features, as target encoding does without cross-fitting. Testing the gain properly needs embeddings fitted on data the boosting model does not train on.
-- **ZIP code did not help in these two embedding models.** Its 879 prefixes, many with few loans, let both models fit noise, and test ROC-AUC falls by 0.001–0.002 (their default rate among the safest 80% does not rise, so the evidence is mixed by metric). That supports excluding ZIP (section 13) without evidence of an accuracy cost, but it does not show that ZIP has no predictive value in any representation.
+- **ZIP code did not help in these two embedding models.** Test ROC-AUC falls by 0.001–0.002; a likely reason, not tested separately, is that its 879 prefixes, many with few loans, let the models fit noise (their default rate among the safest 80% does not rise, so the evidence is mixed by metric). That supports excluding ZIP (section 13) without evidence of an accuracy cost, but it does not show that ZIP has no predictive value in any representation.
 - **The embeddings are interpretable.** The first principal component of the state embeddings correlates **0.90** with each state's default rate, so the network recovers what target encoding captures. The remaining dimensions group states with similar borrowers ([state_embeddings.png](reports/figures/state_embeddings.png)).
 
 ### 12.3 Dimensionality reduction and clustering
@@ -650,7 +656,7 @@ The model shows that loans which are large relative to income default more often
 
 **What the number means.** Under the assumption that the recorded fields capture everything that drives both loan size and default, a loan of at least 25% of income is associated with about 9 percentage points more default than a smaller loan for comparable borrowers. That is an observational estimate of a binary contrast. It is not the effect of a lending policy such as a loan-to-income cap, which would also change who borrows, how much they borrow and on what terms.
 
-**Common support is limited at high incomes.** The treatment is defined from income, and loans were capped at $35,000 until 2015, so no borrower earning over $140,000 in the training data (9,633 loans) is in the treated group. For them, the all-loans estimate relies on the outcome model extrapolating. Inverse propensity weighting brings every covariate in the balance table to within 0.05 standardized differences except income (−0.17), for the same reason. The estimate is nevertheless stable when the target is restricted to where both groups exist:
+**Common support is limited at high incomes.** The treatment is defined from income, and the largest loan in the training sample is $35,000 ($40,000 in 2016), so no borrower earning more than $140,000 in the training data (9,633 loans) is in the treated group. (The report's band "$140k and over" also includes 877 loans at exactly $140,000, 136 of them treated.) For them, the all-loans estimate relies on the outcome model extrapolating. Inverse propensity weighting brings every covariate in the balance table to within 0.05 standardized differences except income (−0.17), for the same reason. The estimate is nevertheless stable when the target is restricted to where both groups exist:
 
 | Estimate | Population | Difference |
 |---|---|---:|
@@ -677,7 +683,7 @@ Clipping at 0.05 changes nothing at two decimals: below 0.05 there are 9,992 con
 | Random | 33 | 7 | 179 | 0.6635 | 0.6635 | 0.6636 | **0.6640** |
 
 - **TPE stays in the good region.** None of its trials falls far enough behind to be pruned, against 7 of the random sampler's (each stopped after 2 folds), and its best CV score ends 0.0002 higher. The median of completed trials (0.6635 against 0.6627) describes each run, but because pruning decides which trials complete, it does not isolate the quality of the sampler.
-- **The difference does not survive to 2016.** The random sampler's winner scores 0.6640 on test against TPE's 0.6636 and production's 0.6639. The response surface is flat around these settings, which agrees with section 9: tuning cannot add much here, so production keeps its parameters. This is one seed per sampler; a general ranking of the samplers would need several.
+- **The difference does not survive to 2016.** The random sampler's winner scores 0.6640 on test against TPE's 0.6636 and production's 0.6639. The two searches found similar winners, which agrees with section 9 that tuning adds little here, so production keeps its parameters. This is one seed per sampler; a general ranking of the samplers would need several.
 - **What matters in the search space** (fANOVA importance over the 40 TPE trials): tree size (0.36) and the number of iterations (0.26) ahead of the feature fraction (0.17), minimum leaf size (0.10), L2 regularization (0.06) and the learning rate (0.05). With 40 trials concentrated by TPE, this ranking is itself uncertain.
 
 **2. AutoML as a CASH problem** (combined algorithm selection and hyperparameter optimization). One TPE study chooses the model family *and* its settings: gradient boosting, random forest, extra trees, logistic regression or the entity-embedding network. To fit the budget it ran 40 trials on a 50,000-loan sample with 3-fold CV.
@@ -941,7 +947,7 @@ python -m loan_default.registry export --out-dir served
 docker run --rm -p 8000:8000 --read-only -v "$PWD/served:/app/models:ro" loan-default
 ```
 
-The exported metadata records the registered name, version and alias, so `/metadata` shows which version is live. `export` resolves the alias once and writes that version's model and metadata into a new release directory, `served/releases/v<version>-<id>/`, which is never modified afterwards; it then switches the link `served/current` to it in one atomic rename. The service resolves `current` once at start-up and loads both files from the same release, so it can never pair one version's model with another's cutoff, even if an export is interrupted. Earlier releases stay in place for rollback. A running service caches its release, so restart it after an export.
+The exported metadata records the registered name, version and alias, so `/metadata` shows which version is live. `export` resolves the alias once and writes that version's model and metadata into a new release directory, `served/releases/v<version>-<id>/`, which is never modified afterwards; it then switches the link `served/current` to it in one atomic rename. The service resolves `current` once at start-up and loads both files from the same release, so it can never pair one version's model with another's cutoff, even if an export is interrupted. If `current` points to a release that no longer exists, the service fails to start rather than falling back to other files in the directory. Releases are directory symbolic links, so this path assumes Linux or macOS; on Windows, creating them depends on system settings. Earlier releases stay in place for rollback. A running service caches its release, so restart it after an export.
 
 ### Serve predictions
 
@@ -978,7 +984,7 @@ python -m loan_default.drift --current logs/predictions.jsonl                   
 python -m loan_default.monitor --log logs/predictions.jsonl --outcomes outcomes.csv     # predicted against actual, by month
 ```
 
-The drift check needs no outcomes but, as the 2016 replay shows, can miss a model going wrong. Besides PSI it reads the change in each field's share of missing values (5 points is a moderate shift, 20 points a large one), and a field whose PSI cannot be computed, for example because every current value is missing, is marked invalid and fails the check. The outcome check catches calibration errors once outcomes arrive. It requires each application id to appear once in the outcomes with a 0 or 1 result, leaves out log rows without a readable time or a valid score, counts an application scored more than once at its first valid score (the one in force at the decision), and reports how many applications were logged, valid, matched and checked. Both fail with exit status 1 when they find a problem; the outcome check exits with 2 when nothing could be checked, so an empty or unusable join never passes. [drift.yml](.github/workflows/drift.yml) runs them weekly, and runs the outcome check even when the input check has already failed.
+The drift check needs no outcomes but, as the 2016 replay shows, can miss a model going wrong. Besides PSI it reads the change in each field's share of missing values (5 points is a moderate shift, 20 points a large one), and a field whose PSI cannot be computed, for example because every current value is missing, is marked invalid and fails the check. The outcome check catches calibration errors once outcomes arrive. It requires each application id to appear once in the outcomes with a 0 or 1 result, leaves out log rows without a readable time or a valid score, counts an application scored more than once at its first valid score (a proxy for the score the decision used, since the log does not record which score took effect; a real deployment should log and join on a decision id), and reports how many applications were logged, valid, matched and checked. Both fail with exit status 1 when they find a problem; the outcome check exits with 2 when nothing could be checked, so an empty or unusable join never passes. [drift.yml](.github/workflows/drift.yml) runs them weekly, and runs the outcome check even when the input check has already failed.
 
 **Docker**
 

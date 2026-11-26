@@ -36,6 +36,7 @@ def test_missing_dti_and_the_999_placeholder_are_valid() -> None:
         {"revenue": 0.0},
         {"revenue": float("inf")},
         {"loan_amnt": float("nan")},
+        {"revenue": 1e-310},  # would make loan-to-income infinite
         {"emp_length": "12 years"},
         {"addr_state": "New York"},
     ],

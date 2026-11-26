@@ -39,6 +39,7 @@ PSI_FLOOR = 1e-6  # keeps empty bins from producing log(0)
 MISSING_MODERATE = 0.05
 MISSING_LARGE = 0.20
 LEVELS = ("stable", "moderate", "large", "invalid")
+FEW_VALUES = 5  # numeric fields with at most this many distinct reference values are binned by value
 
 
 def psi_from_shares(reference: NDArray[np.float64], current: NDArray[np.float64]) -> float:
@@ -51,13 +52,16 @@ def psi_from_shares(reference: NDArray[np.float64], current: NDArray[np.float64]
 def numeric_psi(reference: pd.Series, current: pd.Series, bins: int = 10) -> float:
     """PSI for a numeric feature, using bins that each hold an equal share of the reference data."""
     ref, cur = reference.dropna().to_numpy(dtype=float), current.dropna().to_numpy(dtype=float)
-    edges = np.unique(np.quantile(ref, np.linspace(0, 1, bins + 1)))
-    if len(edges) < 3:
-        # one or two distinct reference values: equal-share bins collapse, so bin below, at and above each value
-        values = np.unique(ref)
+    if len(ref) == 0 or len(cur) == 0:
+        return float("nan")  # nothing to compare: read as invalid
+    values = np.unique(ref)
+    if len(values) <= FEW_VALUES:
+        # a field with few distinct values (a flag, a constant): one bin at each value and one between or
+        # beyond them, so any new value is caught; [v, nextafter(v)) holds exactly the value v
         edges = np.unique(np.concatenate([values, np.nextafter(values, np.inf)]))
         edges = np.concatenate([[-np.inf], edges, [np.inf]])
     else:
+        edges = np.unique(np.quantile(ref, np.linspace(0, 1, bins + 1)))
         edges[0], edges[-1] = -np.inf, np.inf
     return psi_from_shares(np.histogram(ref, edges)[0] / len(ref), np.histogram(cur, edges)[0] / len(cur))
 

@@ -116,3 +116,14 @@ def test_an_outcome_that_is_not_binary_is_an_error() -> None:
     log = pd.DataFrame({"timestamp": ["2026-01-05"], "application_id": ["1"], "default_probability": [0.1]})
     with pytest.raises(ValueError, match="0 \\(repaid\\) or 1"):
         join_outcomes(log, pd.DataFrame({"application_id": ["1"], "default": [2]}))
+
+
+@pytest.mark.parametrize("content", ["", "\n", '{"something": 1}\n'])
+def test_an_empty_or_malformed_log_exits_2(tmp_path: Path, content: str) -> None:
+    log = tmp_path / "log.jsonl"
+    log.write_text(content)
+    outcomes = tmp_path / "outcomes.csv"
+    outcomes.write_text("application_id,default\n1,1\n")
+    with pytest.raises(SystemExit) as stop:
+        main(["--log", str(log), "--outcomes", str(outcomes), "--out-dir", str(tmp_path)])
+    assert stop.value.code == 2
