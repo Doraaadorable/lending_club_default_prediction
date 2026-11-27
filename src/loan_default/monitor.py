@@ -32,8 +32,15 @@ def valid_predictions(log: pd.DataFrame) -> pd.DataFrame:
     Times without a zone are read as UTC (the service writes UTC with an offset).
     """
     missing = [c for c in ("timestamp", "application_id", "default_probability") if c not in log.columns]
-    if missing:
-        return log.iloc[0:0].assign(application_id=pd.Series(dtype=str), _moment=pd.Series(dtype="datetime64[ns, UTC]"))
+    if missing:  # no usable rows, but the same columns as a normal result so callers can carry on
+        return pd.DataFrame(
+            {
+                "timestamp": pd.Series(dtype=object),
+                "application_id": pd.Series(dtype=str),
+                "default_probability": pd.Series(dtype=float),
+                "_moment": pd.Series(dtype="datetime64[ns, UTC]"),
+            }
+        )
     moments = pd.to_datetime(log["timestamp"], utc=True, format="mixed", errors="coerce")
     scores = pd.to_numeric(log["default_probability"], errors="coerce")
     usable = log["application_id"].notna() & moments.notna() & scores.between(0, 1)

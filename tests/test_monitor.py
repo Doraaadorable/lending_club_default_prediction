@@ -127,3 +127,9 @@ def test_an_empty_or_malformed_log_exits_2(tmp_path: Path, content: str) -> None
     with pytest.raises(SystemExit) as stop:
         main(["--log", str(log), "--outcomes", str(outcomes), "--out-dir", str(tmp_path)])
     assert stop.value.code == 2
+
+
+def test_a_log_without_scores_joins_to_nothing_instead_of_raising() -> None:
+    log = pd.DataFrame({"timestamp": ["2026-01-05"], "application_id": ["1"]})
+    joined = join_outcomes(log, pd.DataFrame({"application_id": ["1"], "default": [1]}))
+    assert joined.empty
